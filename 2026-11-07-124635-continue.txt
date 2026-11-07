@@ -1,0 +1,1839 @@
+ ▐▛███▛█   Claude Code v2.1.319
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~\OneDrive\Documents\GitHub\CMCM26
+
+⚠ Your login expires in 2 days · run /login to renew
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ continue                                                                      
+
+● I don't have the earlier conversation, so I'll check the repo and my saved
+  notes to see where the work stopped.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● There's an earlier session transcript, so I'll read how it ended, along with
+  the README and the problem statement.
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● The last session was cut off by an API error mid-read, so I'm requesting the
+  full original brief before doing anything else.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The brief is gated, so no implementation has started; I'm finishing the
+  read-only Step 1 report from the code without making any edits.
+
+  Read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Reading the code won't settle how rows meet aisles, so I'll run a read-only
+  probe in the scratchpad that measures seat and row identity, thinning gaps,
+  row ends, and whether a 0.5 m lattice keeps aisles and doors connected.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The probe shows the model yields 1,309 seats rather than 1,329, and the
+  corridor-to-room 132 door covers no cells. Next I'll run one more read-only
+  probe to find the cause of the seat gap and prototype the row-end and lattice
+  rule.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The last session died on an API error during Step 1 of your brief, so I
+  finished Step 1. I haven't changed anything in the repo, and I need your OK 
+  before Step 2.
+
+  The biggest finding is that the model produces 1,309 seats, not 1,329, so your
+  validation would fail as things stand.
+
+  1. What's there now
+
+  - Spawn points: each has x, y, section, row, seat, clear, so row and seat
+    numbers are already included. They are in feet, and clear is the walkway
+    width.
+  - Seats: Model.seats() (seat centres) and Model.spawn_points() (the same seats
+    moved into the walkway) line up one to one, with no duplicates.
+  - FT: 0.3048 metres per foot, defined in model.py.
+  - Where the geometry lives: all of it is in model.py, in feet. grid.py only
+    rasterizes it and holds the distance field, save/load and render. Nothing
+    else imports grid.py.
+
+  2. Rows and aisles
+
+  - Row identity: (section, row) is unique across all 102 rows, and no row is
+    split into parts. No row fix is needed in model.py.
+  - Node positions: seat nodes go at seats() positions and walkway nodes at
+    spawn_points() positions.
+  - Finding row ends: for each end of a row, I link to the nearest lattice cell
+    with a clear straight line that crosses no obstacle.
+  - Prototype result: every row connected, with a longest link of 5.5 ft (1.67
+    m). All orchestra centre, loge and balcony rows connect at both ends, while
+    20 of the 32 orchestra side rows connect at only one end because the outer
+    end is a wall.
+  - Box rows: their other end opens into two 37-cell pockets between the north
+    and south boxes, reachable only through those rows. Connectivity therefore
+    has to be checked on the full graph, not just the lattice.
+  - Lattice size: 2,083 cells on the first floor and 540 on the balcony, with
+    every door still connected once the seating is removed.
+
+  Problems found
+
+  - Seat shortfall: orchestra has 512 of 527 and mezzanine 481 of 486. The
+    balcony's 316 is correct. The seats() packing loop recalculates pitch from
+    the base value each pass, so it never gets tight enough.
+  - Corridor door to room 132: the 3.5 ft door isn't enforced, because no wall
+    separates the two spaces. The real opening is the full 9 ft corridor width,
+    which would make the SW/SE exit routes look better than they are.
+  - Balcony gaps: thinning removes seats unevenly, so 75 gaps are 1.0 m wide
+    instead of 0.5 m.
+  - Front cross aisle: removing row A's walkway strip leaves about 0.55 m at the
+    centre, which is only one cell wide.
+
+  3. Planned edits
+
+  model.py
+  - seats(): fix the packing search. Pitch drops to 19.0" in the orchestra and
+    19.4" in the mezzanine, then even thinning removes 9 and 1 seats to hit the
+    exact counts.
+  - Add per-seat level if needed, plus the corridor wall from decision 5.
+
+  grid.py
+  - from_model: takes cell_m, centres the lattice on x=0 for east/west symmetry,
+    removes seating, and builds nodes and edges.
+  - New fields: seat and walkway nodes, directed edge arrays, per-cell cost and
+    11 exit labels.
+  - distance_field: runs on the reversed graph so the one-way stairs count
+    correctly, and accepts a blocked mask. I'm keeping it because your Dijkstra
+    line is still in the brief.
+  - components, save, load, render, __main__: updated for the new structure, and
+    __main__ gets your validation report.
+  - Unit changes:
+    - xy, ij and cell become metres.
+    - dist becomes weighted cost, not plain distance.
+    - spawn becomes seat node IDs, since snapping goes away.
+    - cell_ft raises a clear error, as do old .npz files.
+
+  If model.py changes: I'd also regenerate bailey_hall.json and
+  bailey_hall_ft.json and update the README. That goes slightly beyond the two
+  files you named.
+
+  Decisions for you
+
+  1. Seat count: OK to fix it in model.py with the tighter pitches above?
+     Recommended: yes. It's the only change that gets exact counts without 
+     inventing seats.
+  2. Portico doors: the model has four, but your list has only PW and PE.
+     Recommended: keep all four doors, with PW covering 125° and 141° and PE 
+     covering 40° and 55°. That gives 11 labels on 13 physical doors. I'd map
+     the rest as F1–F5 west to east, SW/SE to exit_W/E_room132, and BW/BE to
+     balcony_exit_NW/NE. Is that what you meant?
+  3. Two levels in one coordinate frame: this conflicts with the mirrored
+     level="flat" layout and with (H, W) arrays. Recommended: always build both 
+     levels, with arrays shaped (2, H, W), and retire flat with a clear error.
+     It does break the array shape, so tell me if your team relies on it.
+  4. Stairs:
+     - Fixed cost: recommended 9.14 m (the model's 30 ft) × 2.0 = 18.29. What
+       value do you want?
+     - Landing point: the model lands these stairs in the vestibule corners, not
+       the foyer. Recommended: keep that.
+     - BW/BE: recommended: end at the balcony door, with no stair in the graph, 
+       so a later model must add that stair's time.
+  5. Room 132 door: enforce the 3.5 ft width by adding a wall in model.py?
+     Recommended: yes.
+  6. "Consistent with 0.5 m cells": recommended: true lengths in metres (0.5, 
+     0.707, about 0.50 for seat to seat, about 0.43 for seat to walkway). Did
+     you mean something else, such as counting in cell units?
+  7. Balcony gaps: recommended: keep the seat positions and use the true 1.0 m 
+     edge length. The alternative is even spacing at 0.64 m, which is wider than
+     real seats.
+  8. Row A: recommended: leave its strip on the lattice so the cross aisle stays
+     two cells wide, and link its walkway nodes at the row ends only.
+
+  Default I'm assuming unless you object: seat to walkway is one-way, and seat
+  to seat runs both directions.
+
+  Before Step 2:
+  - The brief's "nine regular exit doors" appear in the model as five openings,
+    four of them double-leaf. The grid will follow the model.
+  - .venv is gone, but system Python 3.14 has everything needed for this work.
+  - The two modified out/grid_flat_0.5ft files are safe to ignore. The .npz
+    arrays match the committed version exactly, so they're just a re-run, and
+    I'd write new outputs under new names.
+
+  Reply "OK to all" to accept every recommendation, or list any changes.
+
+✻ Cooked for 4m 28s · done 12:06 PM
+
+❯ wait I need a more clear explination on exactly what your doing. Are the grid 
+  cells for the walkways and hallways all 0.5 by 0.5 meters while each seat is  
+  an individual node                                                            
+
+● Yes, with one addition: the narrow walkways between seat rows are nodes too,
+  not cells. Only the open areas use the 0.5 m × 0.5 m grid.
+
+  ┌─────────────────────┬──────────────────────┬────────────────────────────┐
+  │        Area         │ How it's represented │          Spacing           │
+  ├─────────────────────┼──────────────────────┼────────────────────────────┤
+  │ Hallways, foyer,    │ Grid cells of 0.5 m  │                            │
+  │ main aisles,        │ × 0.5 m              │ Fixed at 0.5 m             │
+  │ stairs, doors       │                      │                            │
+  ├─────────────────────┼──────────────────────┼────────────────────────────┤
+  │                     │ 1 node, 1,329 in     │ Wherever the seat actually │
+  │ Each seat           │ total                │  is, about 0.5 m apart,    │
+  │                     │                      │ with no snapping           │
+  ├─────────────────────┼──────────────────────┼────────────────────────────┤
+  │ Walkway between two │ 1 node per seat,     │                            │
+  │  seat rows          │ directly in front of │ Follows the seats          │
+  │                     │  it                  │                            │
+  └─────────────────────┴──────────────────────┴────────────────────────────┘
+
+  Why row walkways can't be cells: they're only 1.2–1.6 ft wide (about 0.37–0.49
+  m), which is narrower than one cell. On the grid they would disappear or come
+  out broken, so that's why the row areas are cut out of the grid and replaced
+  with nodes.
+
+  One row looks like this:
+
+   seat ─ seat ─ seat ─ seat ─ seat      you can climb along seats (slow, cost 
+  2.5)
+    │      │      │      │      │        each seat steps out to its walkway node
+   walk ─ walk ─ walk ─ walk ─ walk      walkway nodes chain along the row (cost
+  1)
+    │                            │
+   aisle                       aisle     row ends link to the nearest 0.5 m cell
+   cells                       cells
+
+  A person's route out:
+  1. They start on their seat node.
+  2. They step onto the walkway node in front of them.
+  3. They move along the walkway chain to the end of the row.
+  4. They step onto an aisle cell, then move cell to cell through the aisles,
+     doors and corridor.
+  5. They leave through an exit, or balcony seats reach an exit by way of a
+     one-way stair link to the first floor or a stage-side door.
+
+  It's all one connected graph: a grid cell is treated like any other node,
+  joined to its 8 neighbors. That means one distance calculation can cover the
+  whole building, and a later simulation can walk it the same way everywhere.
+
+  Row edges can differ slightly from 0.5 m: edges in the seat rows use their
+  real lengths instead of exact cell steps. Seat to seat is about 0.5 m and seat
+  to walkway is about 0.43 m. That's what decision 6 is asking you to confirm.
+
+  I still haven't changed anything. Does this match what you had in mind? If so,
+  you can reply "OK to all" or tell me which of the 8 decisions you'd change.
+
+✻ Baked for 9s · done 12:10 PM
+
+❯ ok yes go for it                                                              
+
+● Go-ahead received, so I'm starting Step 2 with all the recommended decisions,
+  beginning with model.py. While planning this I found another issue. The
+  barrier and foyer wall are thinner than a cell, so neighboring cells could
+  connect straight through them. I'll test every lattice step against the
+  geometry, not just the cell centres.
+
+● Skill(dataviz)
+  ⎿  Successfully loaded skill
+
+● Bash(cd "C:/Users/jason/OneDrive/Documents/GitHub/CMCM26/bailey_hall" &&
+      python - <<'E'
+      path='model.py'…)
+  ⎿  corridor_W_to_132 corridor_E_to_132 (-68.5, 29.4, -51.5, 37.1)
+     first_floor 1013 {'orchestra': 527, 'loge': 486} outside 0 parts 1
+     balcony 316 {'balcony': 316} outside 0 parts 1
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated bailey_hall\model.py (+41 -13)
+      379                                          p.corridor_north_y - p
+           .door_depth_pad, p.room132[2] + p.door_depth_pad),
+      380                                     p.corridor_to_132_x[1] - p.
+           corridor_to_132_x[0], "door",
+      381                                     "ASSUMPTION: 3.5 ft door be
+           tween the corridor end and room 132"))
+      382 +            # The corridor and room 132 share an edge, so with
+          +out this wall the whole 9 ft corridor                         
+      383 +            # width stays open and the 3.5 ft door above would
+          + limit nothing.                                               
+      384 +            O[f"corridor_{tag}_132_wall"] = rect(-sgn * p.r_ex
+          +t_in, -sgn * p.r_wall_out,                                    
+      385 +                                                 p.corridor_no
+          +rth_y - p.door_depth_pad,                                     
+      386 +                                                 p.corridor_no
+          +rth_y + p.door_depth_pad).difference(self.doors[-1].poly)     
+      387          # the first escape stair is a stair (slower); record a
+           s obstacle-free space but tag it
+      388          # --- corridor + vestibule ---------------------------
+           ----------------------------
+      389          corr = annulus(p.r_wall_out, p.r_ext_in, -180, 0, 0.5)
+     ...
+      511          return [d for d in self.doors if d.level == level and 
+           d.kind in ("exit", "stair-head")]
+      512  
+      513      OFFICIAL_SEATS = {"orchestra": 527, "loge": 486, "balcony"
+           : 316}
+      514 +    SEAT_PITCH_STEP = 0.005   # feet                          
+      515 +    MIN_SEAT_PITCH = 1.25     # feet; 15" is narrower than any
+          + real chair, so stop searching there                          
+      516  
+      517      @staticmethod
+      518      def section_group(section: str) -> str:
+     ...
+      537              grp_seats = [s for s in out if self.section_group(
+           s["section"]) == grp]
+      538              n, target = len(grp_seats), self.OFFICIAL_SEATS[gr
+           p]
+      539              if 0 < n < target:   # a few seats short (e.g. 'MB
+           ' chairs on movable bases): pack the rows a little tighter
+      533 -                for _ in range(4):                            
+      534 -                    pitch2 = pitch * n / target * 0.995       
+      535 -                    grp_seats = [s for s in self._seats_raw(le
+          -vel, pitch2) if self.section_group(s["section"]) == grp]      
+      540 +                # Seat counts jump in whole seats per row, so 
+          +a proportional pitch estimate can                             
+      541 +                # stall below the target; stepping down guaran
+          +tees the first pitch that fits.                               
+      542 +                packed_pitch = pitch                          
+      543 +                while n < target and packed_pitch > self.MIN_S
+          +EAT_PITCH:                                                    
+      544 +                    packed_pitch -= self.SEAT_PITCH_STEP      
+      545 +                    grp_seats = [s for s in self._seats_raw(le
+          +vel, packed_pitch) if self.section_group(s["section"]) == grp]
+      546                      n = len(grp_seats)
+      537 -                    if n >= target:                           
+      538 -                        break                                 
+      547              if n <= target:
+      548                  res += grp_seats
+      549                  continue
+     ...
+      576          p = self.p
+      577          out = []
+      578          for s in self.seats(level, trim=trim):
+     … 45 more lines (ctrl+o to expand)
+
+● model.py is done: seats are now exactly 527 / 486 / 316, and the room 132 door
+  is a true 3.5 ft opening on both sides. Next is the grid.py rewrite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The heredoc was too long for the shell, so the write failed. I'm switching to
+  the Write tool and also cleaning up an unused dict, an unused import and some
+  unclear portico labels.
+
+● Write(bailey_hall\grid.py)
+  ⎿  Added 620 lines, removed 140 lines
+       1  """
+       2 -Rasterise the Bailey Hall model onto a dense square grid (for c
+         -ellular-automaton / floor-field /                              
+       3 -lattice-gas style simulations).                                
+       2 +Hybrid spatial grid of Bailey Hall: a 0.5 m lattice for open fl
+         +oor plus a graph for seat rows.                                
+       3 +This file builds the space a later simulation runs on.  It cont
+         +ains no simulation.                                            
+       4  
+       5      from grid import Grid
+       6 -    g = Grid.from_model(level="flat", cell_ft=0.5)        # "fi
+         -rst_floor", "balcony" or "flat"                                
+       7 -    g.walkable        # bool  (H, W)   True = floor a person ca
+         -n stand on                                                     
+       8 -    g.exit_id         # int16 (H, W)   -1 = none, else index in
+         -to g.exits (names)                                             
+       9 -    g.door_id         # int16 (H, W)   -1 = none, else index in
+         -to g.doors (interior doors incl. exits)                        
+      10 -    g.dist            # float (H, W)   walking distance to the 
+         -nearest exit in FEET (inf = unreachable)                       
+      11 -    g.spawn           # int32 (N, 2)   (row, col) of one cell p
+         -er seat = where each person starts                             
+      12 -    g.seat_section    # list[str]      section name per spawn c
+         -ell                                                            
+      13 -    g.xy(i, j) / g.ij(x, y)            # grid <-> feet conversi
+         -ons (cell centres)                                             
+      14 -    g.save("out/grid_flat_0.5ft.npz") / Grid.load(path)        
+       6 +    grid = Grid.from_model(cell_m=0.5)                         
+       7 +    grid.walkable        # bool    (2, H, W)  lattice cells; le
+         +vel 0 = first floor, 1 = balcony                               
+       8 +    grid.exit_id         # int16   (2, H, W)  -1 = none, else i
+         +ndex into grid.exits (11 labels)                               
+       9 +    grid.door_id         # int16   (2, H, W)  -1 = none, else i
+         +ndex into grid.doors                                           
+      10 +    grid.cell_cost       # float   (2, H, W)  cost of entering 
+         +a cell (floor 1, stairs 2)                                     
+      11 +    grid.cell_node       # int32   (2, H, W)  -1 = none, else n
+         +ode id of that cell                                            
+      12 +    grid.dist            # float   (2, H, W)  cheapest cost to 
+         +any exit from each lattice cell                                
+      13 +    grid.node_dist       # float   (nodes,)   the same for ever
+         +y node, seats and walkways included                            
+      14 +    grid.spawn           # int32   (seats,)   node id of each s
+         +eat                                                            
+      15 +    grid.seat_section / seat_row / seat_number / walkway_nodes 
+         +    # per seat                                                 
+      16 +    grid.node_kind / node_level / node_x / node_y / node_cost  
+         +    # per node                                                 
+      17 +    grid.edge_from / edge_to / edge_kind / edge_length / edge_c
+         +ost # per directed edge                                        
+      18 +    grid.exit_mask("F3") / grid.door_mask("foyer_door_+0")     
+         +    # masks for closing a gate                                 
+      19 +    grid.distance_field(targets, blocked=mask)                 
+         +    # no rebuild needed                                        
+      20 +    grid.xy(row, column) / grid.ij(x, y)                       
+         +    # lattice <-> metres                                       
+      21 +    grid.save(path) / Grid.load(path)                          
+      22  
+      16 -Rows go north -> south (row 0 is the northern edge), columns we
+         -st -> east, like an image.                                     
+      17 -Cell test = cell CENTRE inside the walkable polygon, so a corri
+         -dor narrower than one cell can                                 
+      18 -disappear: keep cell_ft <= half the narrowest passage you care 
+         -about (row walkways are                                        
+      19 -1.33 ft in the orchestra, 1.2-1.6 ft elsewhere) or run at 0.5 f
+         -t and let an agent occupy                                      
+      20 -several cells.                                                 
+      23 +Every length, position and cost here is in METRES (a cost is me
+         +tres weighted by the entry cost                                
+      24 +of the destination).  model.py stays in feet, and from_model co
+         +nverts its geometry once, so                                   
+      25 +this file never holds a length in feet.                        
+      26  
+      22 -    python bailey_hall/grid.py [cell_ft] [level]     -> out/gri
+         -d_<level>_<cell>ft.npz + .png                                  
+      27 +Lattice rows go north -> south and columns west -> east, like a
+         +n image.  Both levels share one                                
+      28 +coordinate frame and one lattice.                              
+      29 +                                                               
+      30 +    python bailey_hall/grid.py [cell_m]     -> out/grid_hybrid_
+         +<cell>m.npz + .png + validation                                
+      31  """
+      32  from __future__ import annotations
+      33  
+     ...
+       35  import math
+       36  import os
+       37  import sys
+       30 -from dataclasses import dataclass, field                      
+       31 -from typing import List, Optional                             
+       38 +from dataclasses import dataclass                             
+       39 +from typing import Dict, Iterable, List, Optional, Tuple, Unio
+          +n                                                             
+       40  
+       41  import numpy as np
+       42  import shapely
+       35 -from shapely.geometry import Polygon, MultiPolygon            
+       43  
+       44  from model import FT, Model
+       45  
+       46  HERE = os.path.dirname(os.path.abspath(__file__))
+       47  
+       48 +FORMAT_VERSION = 2                                            
+       49  
+       50 +FIRST_FLOOR, BALCONY = 0, 1                                   
+       51 +LEVEL_NAMES = ("first_floor", "balcony")                      
+       52 +                                                              
+       53 +COST_FLOOR = 1.0        # also doors, exits and walkway nodes 
+       54 +COST_STAIRS = 2.0                                             
+       55 +COST_SEAT = 2.5                                               
+       56 +                                                              
+       57 +NODE_CELL, NODE_SEAT, NODE_WALKWAY = 0, 1, 2                  
+       58 +NODE_KIND_NAMES = ("cell", "seat", "walkway")                 
+       59 +                                                              
+       60 +EDGE_LATTICE, EDGE_SEAT_SEAT, EDGE_SEAT_WALKWAY, EDGE_WALKWAY_
+          +WALKWAY, EDGE_ROW_LINK, EDGE_STAIR = range(6)                 
+       61 +EDGE_KIND_NAMES = ("lattice", "seat_seat", "seat_walkway", "wa
+          +lkway_walkway", "row_link", "stair")                          
+       62 +                                                              
+       63 +# Exit label -> (level, model door names).  The portico has fo
+          +ur physical doors but two labels.                             
+       64 +EXIT_DOORS: Dict[str, Tuple[int, Tuple[str, ...]]] = {        
+       65 +    "F1": (FIRST_FLOOR, ("front_door_-20",)),                 
+       66 +    "F2": (FIRST_FLOOR, ("front_door_-10",)),                 
+       67 +    "F3": (FIRST_FLOOR, ("front_door_+0",)),                  
+       68 +    "F4": (FIRST_FLOOR, ("front_door_+10",)),                 
+       69 +    "F5": (FIRST_FLOOR, ("front_door_+20",)),                 
+       70 +    "PW": (FIRST_FLOOR, ("portico_door_125", "portico_door_141
+          +")),                                                          
+       71 +    "PE": (FIRST_FLOOR, ("portico_door_40", "portico_door_55")
+          +),                                                            
+       72 +    "SW": (FIRST_FLOOR, ("exit_W_room132",)),                 
+       73 +    "SE": (FIRST_FLOOR, ("exit_E_room132",)),                 
+       74 +    "BW": (BALCONY, ("balcony_exit_NW",)),                    
+       75 +    "BE": (BALCONY, ("balcony_exit_NE",)),                    
+       76 +}                                                             
+       77 +                                                              
+       78 +# Stairs that get a one-way link.  The stage-side stairs have 
+          +none because BW/BE end at the door.                           
+       79 +STAIR_HEAD_DOORS = {"stair_SW": "balcony_exit_SW", "stair_SE":
+          + "balcony_exit_SE"}                                           
+       80 +                                                              
+       81 +# Fragments smaller than this are left over from cutting seats
+          + out of the lattice.  Linking a row                           
+       82 +# to one would strand the row, while the larger pockets beside
+          + the boxes are real floor.                                    
+       83 +MIN_ISLAND_CELLS = 4                                          
+       84 +                                                              
+       85 +# A row end further than this from open floor faces a wall rat
+          +her than an aisle.                                            
+       86 +MAX_ROW_LINK_M = 1.83                                         
+       87 +                                                              
+       88 +# Row A's strip is part of the front cross aisle, and cutting 
+          +it out would leave that aisle one                             
+       89 +# cell wide.  Its walkway nodes stay as nodes and the floor ar
+          +ound them stays on the lattice.                               
+       90 +OPEN_FRONT_ROW = "A"                                          
+       91 +                                                              
+       92 +                                                              
+       93 +def _to_metres(geometry):                                     
+       94 +    return shapely.transform(geometry, lambda coordinates: coo
+          +rdinates * FT)                                                
+       95 +                                                              
+       96 +                                                              
+       97 +def _connected_labels(num_nodes: int, starts: np.ndarray, stop
+          +s: np.ndarray) -> np.ndarray:                                 
+       98 +    """Component label per node, treating every edge as two-wa
+          +y."""                                                         
+       99 +    parent = list(range(num_nodes))                           
+      100 +                                                              
+      101 +    def find(node):                                           
+      102 +        while parent[node] != node:                           
+      103 +            parent[node] = parent[parent[node]]               
+      104 +            node = parent[node]                               
+      105 +        return node                                           
+      106 +                                                              
+      107 +    for start, stop in zip(starts.tolist(), stops.tolist()):  
+      108 +        root_start, root_stop = find(start), find(stop)       
+      109 +        if root_start != root_stop:                           
+      110 +            parent[root_start] = root_stop                    
+      111 +    return np.array([find(node) for node in range(num_nodes)],
+          + np.int32)                                                    
+      112 +                                                              
+      113 +                                                              
+      114 +def _segments(x_start, y_start, x_stop, y_stop):              
+      115 +    coordinates = np.stack([np.column_stack([x_start, y_start]
+          +), np.column_stack([x_stop, y_stop])], axis=1)                
+      116 +    return shapely.linestrings(coordinates)                   
+      117 +                                                              
+      118 +                                                              
+      119 +def _open_steps(cell_mask: np.ndarray, floor, center_x: np.nda
+          +rray, center_y: np.ndarray):                                  
+      120 +    """Lattice steps that stay on the floor, as east, south an
+          +d two diagonal step tables.                                   
+      121 +                                                              
+      122 +    Two neighbouring cell centres can both be walkable with a 
+          +wall between them: the orchestra                              
+      123 +    barrier and foyer wall are thinner than a cell.  So each s
+          +tep is tested as a segment, not                               
+      124 +    just by its end points."""                                
+      125 +    num_rows, num_columns = cell_mask.shape                   
+      126 +                                                              
+      127 +    def open_step(row_step: int, column_step: int) -> np.ndarr
+          +ay:                                                           
+      128 +        rows, columns = np.nonzero(cell_mask)                 
+      129 +        next_rows, next_columns = rows + row_step, columns + c
+          +olumn_step                                                    
+      130 +        inside = (next_rows >= 0) & (next_rows < num_rows) & (
+          +next_columns >= 0) & (next_columns < num_columns)             
+      131 +        rows, columns, next_rows, next_columns = rows[inside],
+          + columns[inside], next_rows[inside], next_columns[inside]     
+      132 +        both_cells = cell_mask[next_rows, next_columns]       
+      133 +        rows, columns, next_rows, next_columns = rows[both_cel
+          +ls], columns[both_cells], next_rows[both_cells], next_columns[
+          +both_cells]                                                   
+      134 +        result = np.zeros(cell_mask.shape, bool)              
+      135 +        if len(rows):                                         
+      136 +            lines = _segments(center_x[rows, columns], center_
+          +y[rows, columns],                                             
+      137 +                              center_x[next_rows, next_columns
+          +], center_y[next_rows, next_columns])                         
+      138 +            result[rows, columns] = shapely.covers(floor, line
+          +s)                                                            
+      139 +        return result                                         
+      140 +                                                              
+      141 +    east = open_step(0, 1)                                    
+      142 +    south = open_step(1, 0)                                   
+      143 +    south_east = open_step(1, 1)                              
+      144 +    south_west = open_step(1, -1)                             
+      145 +                                                              
+      146 +    # No corner cutting: a diagonal needs both cells beside it
+          + and all four sides of its square.                            
+      147 +    south_east[:-1, :-1] &= (east[:-1, :-1] & south[:-1, 1:] &
+          + south[:-1, :-1] & east[1:, :-1])                             
+      148 +    south_west[:-1, 1:] &= (south[:-1, 1:] & east[1:, :-1] & e
+          +ast[:-1, :-1] & south[:-1, :-1])                              
+      149 +    return east, south, south_east, south_west                
+      150 +                                                              
+      151 +                                                              
+      152 +def _without_islands(cell_mask: np.ndarray, floor, center_x, c
+          +enter_y) -> np.ndarray:                                       
+      153 +    east, south, _, _ = _open_steps(cell_mask, floor, center_x
+          +, center_y)                                                   
+      154 +    cell_index = np.full(cell_mask.shape, -1, np.int32)       
+      155 +    cell_index[cell_mask] = np.arange(int(cell_mask.sum()))   
+      156 +    rows_east, columns_east = np.nonzero(east)                
+      157 +    rows_south, columns_south = np.nonzero(south)             
+      158 +    starts = np.concatenate([cell_index[rows_east, columns_eas
+          +t], cell_index[rows_south, columns_south]])                   
+      159 +    stops = np.concatenate([cell_index[rows_east, columns_east
+          + + 1], cell_index[rows_south + 1, columns_south]])            
+      160 +    labels = _connected_labels(int(cell_mask.sum()), starts, s
+          +tops)                                                         
+      161 +    sizes = np.bincount(labels, minlength=labels.max() + 1)   
+      162 +    kept = cell_mask.copy()                                   
+      163 +    kept[cell_mask] = sizes[labels] >= MIN_ISLAND_CELLS       
+      164 +    return kept                                               
+      165 +                                                              
+      166 +                                                              
+      167 +def _row_link(start_x: float, start_y: float, cell_x: np.ndarr
+          +ay, cell_y: np.ndarray, on_level: np.ndarray,                 
+      168 +              walkable_area) -> Optional[Tuple[int, float]]:  
+      169 +    """Nearest lattice cell a row end can walk to in a straigh
+          +t line, or None at a dead end.                                
+      170 +                                                              
+      171 +    Being near a cell is not enough: the closest one may sit b
+          +ehind the barrier or another row."""                          
+      172 +    distances = np.hypot(cell_x - start_x, cell_y - start_y)  
+      173 +    candidates = np.nonzero(on_level & (distances <= MAX_ROW_L
+          +INK_M))[0]                                                    
+      174 +    if len(candidates) == 0:                                  
+      175 +        return None                                           
+      176 +    candidates = candidates[np.argsort(distances[candidates], 
+          +kind="stable")]                                               
+      177 +    lines = _segments(np.full(len(candidates), start_x), np.fu
+          +ll(len(candidates), start_y),                                 
+      178 +                      cell_x[candidates], cell_y[candidates]) 
+      179 +    clear = shapely.covers(walkable_area, lines)              
+      180 +    if not clear.any():                                       
+      181 +        return None                                           
+      182 +    chosen = candidates[np.argmax(clear)]                     
+      183 +    return int(chosen), float(distances[chosen])              
+      184 +                                                              
+      185 +                                                              
+      186  @dataclass
+      187  class Grid:
+       44 -    cell: float                 # cell size in feet           
+       45 -    x0: float                   # x of the WEST edge of column
+          - 0 (feet)                                                     
+       46 -    y0: float                   # y of the NORTH edge of row 0
+          - (feet)                                                       
+      188 +    cell: float                 # cell size in metres         
+      189 +    x0: float                   # x of the WEST edge of column
+          + 0 (metres)                                                   
+      190 +    y0: float                   # y of the NORTH edge of row 0
+          + (metres)                                                     
+      191      walkable: np.ndarray
+      192      exit_id: np.ndarray
+      193      door_id: np.ndarray
+     ...
+      196      seat_section: List[str]
+      197      exits: List[str]
+      198      doors: List[str]
+       55 -    level: str = ""                                           
+      199 +    level: str                                                
+      200 +    cell_cost: np.ndarray                                     
+      201 +    cell_node: np.ndarray                                     
+      202 +    node_kind: np.ndarray                                     
+      203 +    node_level: np.ndarray                                    
+      204 +    node_x: np.ndarray                                        
+      205 +    node_y: np.ndarray                                        
+      206 +    node_cost: np.ndarray                                     
+      207 +    node_dist: np.ndarray                                     
+      208 +    edge_from: np.ndarray                                     
+      209 +    edge_to: np.ndarray                                       
+      210 +    edge_kind: np.ndarray                                     
+      211 +    edge_length: np.ndarray                                   
+      212 +    edge_cost: np.ndarray                                     
+      213 +    edge_corner_a: np.ndarray   # for a diagonal, the two cell
+          +s it passes between; otherwise -1                             
+      214 +    edge_corner_b: np.ndarray                                 
+      215 +    walkway_nodes: np.ndarray   # walkway node in front of eac
+          +h seat                                                        
+      216 +    seat_row: np.ndarray        # index into row_names per sea
+          +t                                                             
+      217 +    seat_number: np.ndarray     # position within the row, fro
+          +m model.py (gaps where a seat was thinned)                    
+      218 +    row_names: List[str]                                      
+      219  
+      220      # --------------------------------------------------------
+           ----- conversions --
+       58 -    def xy(self, i, j):                                       
+       59 -        """centre of cell (i, j) in feet"""                   
+       60 -        return self.x0 + (np.asarray(j) + 0.5) * self.cell, se
+          -lf.y0 - (np.asarray(i) + 0.5) * self.cell                     
+      221 +    def xy(self, row, column):                                
+      222 +        """Centre of lattice cell (row, column) in metres.""" 
+      223 +        return self.x0 + (np.asarray(column) + 0.5) * self.cel
+          +l, self.y0 - (np.asarray(row) + 0.5) * self.cell              
+      224  
+      225      def ij(self, x, y):
+      226 +        """Lattice (row, column) containing a point given in m
+          +etres."""                                                     
+      227          return (np.floor((self.y0 - np.asarray(y)) / self.cell
+           ).astype(int),
+      228                  np.floor((np.asarray(x) - self.x0) / self.cell
+           ).astype(int))
+      229  
+     ...
+      233  
+      234      @property
+      235      def cell_m(self):
+       72 -        return self.cell * FT                                 
+      236 +        return self.cell                                      
+      237  
+      238 +    @property                                                 
+      239 +    def num_nodes(self):                                      
+      240 +        return len(self.node_kind)                            
+      241 +                                                              
+      242      # --------------------------------------------------------
+           ------- building --
+      243      @classmethod
+       76 -    def from_model(cls, model: Optional[Model] = None, level: 
+          -str = "flat", cell_ft: float = 0.5,                           
+       77 -                   margin_ft: float = 2.0, include_outdoor: bo
+          -ol = False) -> "Grid":                                        
+       78 -        m = model or Model()                                  
+       79 -        if level == "flat":                                   
+       80 -            flat = m.flattened()                              
+       81 -            walk = flat["walkable"]                           
+       82 -            exits = flat["exits"]                           # 
+          -[(name, poly)]                                                
+       83 -            doors = [(d.name, d.poly) for d in m.doors if d.le
+          -vel == "first_floor"]                                         
+       84 -            spawn_pts = flat["spawn"]                         
+       85 -        else:                                                 
+       86 -            walk = m.walkable(level)                          
+       87 -            exits = [(d.name, d.poly) for d in m.exits(level)]
+       88 -            doors = [(d.name, d.poly) for d in m.doors if d.le
+          -vel == level]                                                 
+       89 -            spawn_pts = m.spawn_points(level)                 
+       90 -        if include_outdoor and level != "balcony":            
+       91 -            walk = shapely.union_all([walk] + list(m.outdoor.v
+          -alues())).buffer(0)                                           
+      244 +    def from_model(cls, model: Optional[Model] = None, level: 
+          +str = "both", cell_m: float = 0.5,                            
+      245 +                   margin_m: float = 0.6, include_outdoor: boo
+          +l = False,                                                    
+      246 +                   cell_ft: Optional[float] = None) -> "Grid":
+      247 +        if cell_ft is not None:                               
+      248 +            raise TypeError("cell_ft was removed so feet and m
+          +etres cannot be mixed; pass cell_m")                          
+      249 +        if level != "both":                                   
+      250 +            raise ValueError(f"level={level!r} is no longer bu
+          +ilt: stairs need both levels in one "                         
+      251 +                             "coordinate frame, so a Grid alwa
+          +ys holds both (level='both')")                                
+      252 +        building = model or Model()                           
+      253  
+       93 -        minx, miny, maxx, maxy = walk.bounds                  
+       94 -        x0, y1 = minx - margin_ft, maxy + margin_ft           
+       95 -        W = int(math.ceil((maxx + margin_ft - x0) / cell_ft)) 
+       96 -        H = int(math.ceil((y1 - (miny - margin_ft)) / cell_ft)
+          -)                                                             
+       97 -        jj, ii = np.meshgrid(np.arange(W), np.arange(H))      
+       98 -        cx = x0 + (jj + 0.5) * cell_ft                        
+       99 -        cy = y1 - (ii + 0.5) * cell_ft                        
+      100 -        walkable = shapely.contains_xy(walk, cx.ravel(), cy.ra
+          -vel()).reshape(H, W)                                          
+      254 +        walkable_areas = [building.walkable(name) for name in 
+          +LEVEL_NAMES]                                                  
+      255 +        if include_outdoor:                                   
+      256 +            walkable_areas[FIRST_FLOOR] = shapely.union_all(  
+      257 +                [walkable_areas[FIRST_FLOOR]] + list(building.
+          +outdoor.values())).buffer(0)                                  
+      258 +        walkable_areas = [_to_metres(area) for area in walkabl
+          +e_areas]                                                      
+      259  
+      102 -        def id_map(items):                                    
+      103 -            ids = np.full((H, W), -1, np.int16)               
+      104 -            for k, (_, poly) in enumerate(items):             
+      105 -                # a door is a thin rectangle; test cell centre
+          -s against the slightly grown polygon                          
+      106 -                hit = shapely.contains_xy(poly.buffer(cell_ft 
+          -* 0.5), cx.ravel(), cy.ravel()).reshape(H, W)                 
+      107 -                ids[hit & walkable] = k                       
+      108 -            return ids                                        
+      260 +        lattice_floors = []                                   
+      261 +        for level_index, name in enumerate(LEVEL_NAMES):      
+      262 +            seat_regions = []                                 
+      263 +            for region in building.row_regions(name):         
+      264 +                seat_regions.append(region["poly"])           
+      265 +                is_open_front = region["section"].startswith("
+          +orchestra") and region["row"] == OPEN_FRONT_ROW               
+      266 +                if not is_open_front:                         
+      267 +                    seat_regions.append(region["strip"])      
+      268 +            cut_out = _to_metres(shapely.union_all(seat_region
+          +s))                                                           
+      269 +            lattice_floors.append(walkable_areas[level_index].
+          +difference(cut_out).buffer(0))                                
+      270  
+      110 -        exit_id = id_map(exits)                               
+      111 -        door_id = id_map(doors)                               
+      271 +        # x = 0 falls on a cell edge so the lattice treats the
+          + east and west halves alike.                                  
+      272 +        bounds = np.array([area.bounds for area in walkable_ar
+          +eas])                                                         
+      273 +        half_columns = int(math.ceil((np.abs(bounds[:, [0, 2]]
+          +).max() + margin_m) / cell_m))                                
+      274 +        x0 = -half_columns * cell_m                           
+      275 +        y0 = math.ceil((bounds[:, 3].max() + margin_m) / cell_
+          +m) * cell_m                                                   
+      276 +        num_columns = 2 * half_columns                        
+      277 +        num_rows = int(math.ceil((y0 - (bounds[:, 1].min() - m
+          +argin_m)) / cell_m))                                          
+      278 +        columns_grid, rows_grid = np.meshgrid(np.arange(num_co
+          +lumns), np.arange(num_rows))                                  
+      279 +        center_x = x0 + (columns_grid + 0.5) * cell_m         
+      280 +        center_y = y0 - (rows_grid + 0.5) * cell_m            
+      281 +        lattice_shape = (2, num_rows, num_columns)            
+      282  
+      113 -        # spawn cells: snap each spawn point to its cell; if t
+          -hat cell is not walkable (coarse                              
+      114 -        # grid) take the nearest walkable cell within 1 cell  
+      115 -        spawn, sections = [], []                              
+      116 -        for s in spawn_pts:                                   
+      117 -            i, j = int((y1 - s["y"]) // cell_ft), int((s["x"] 
+          -- x0) // cell_ft)                                             
+      118 -            if not walkable[i, j]:                            
+      119 -                cand = [(i + di, j + dj) for di in (-1, 0, 1) 
+          -for dj in (-1, 0, 1)                                          
+      120 -                        if 0 <= i + di < H and 0 <= j + dj < W
+          - and walkable[i + di, j + dj]]                                
+      121 -                if not cand:                                  
+      122 -                    continue                                  
+      123 -                i, j = min(cand, key=lambda c: (c[0] - i) ** 2
+          - + (c[1] - j) ** 2)                                           
+      124 -            spawn.append((i, j)); sections.append(s["section"]
+          -)                                                             
+      125 -        spawn = np.array(spawn, np.int32).reshape(-1, 2)      
+      283 +        def cells_in(polygon) -> np.ndarray:                  
+      284 +            return shapely.contains_xy(polygon, center_x.ravel
+          +(), center_y.ravel()).reshape(num_rows, num_columns)          
+      285  
+      127 -        g = cls(cell_ft, x0, y1, walkable, exit_id, door_id, n
+          -p.full((H, W), np.inf),                                       
+      128 -                spawn, sections, [n for n, _ in exits], [n for
+          - n, _ in doors], level)                                       
+      129 -        g.dist = g.distance_field(exit_id >= 0)               
+      130 -        return g                                              
+      286 +        walkable = np.zeros(lattice_shape, bool)              
+      287 +        for level_index, floor in enumerate(lattice_floors):  
+      288 +            walkable[level_index] = _without_islands(cells_in(
+          +floor), floor, center_x, center_y)                            
+      289  
+      290 +        # A door is often thinner than a cell, so grow it by h
+          +alf a cell to be sure it catches one.                         
+      291 +        door_names = [door.name for door in building.doors]   
+      292 +        door_id = np.full(lattice_shape, -1, np.int16)        
+      293 +        for door_index, door in enumerate(building.doors):    
+      294 +            level_index = LEVEL_NAMES.index(door.level)       
+      295 +            grown = _to_metres(door.poly).buffer(cell_m * 0.5)
+      296 +            door_id[level_index][cells_in(grown) & walkable[le
+          +vel_index]] = door_index                                      
+      297 +                                                              
+      298 +        exit_names = list(EXIT_DOORS)                         
+      299 +        exit_id = np.full(lattice_shape, -1, np.int16)        
+      300 +        for exit_index, (level_index, names) in enumerate(EXIT
+          +_DOORS.values()):                                             
+      301 +            for name in names:                                
+      302 +                door = building.doors[door_names.index(name)] 
+      303 +                grown = _to_metres(door.poly).buffer(cell_m * 
+          +0.5)                                                          
+      304 +                exit_id[level_index][cells_in(grown) & walkabl
+          +e[level_index]] = exit_index                                  
+      305 +                                                              
+      306 +        cell_cost = np.full(lattice_shape, COST_FLOOR)        
+      307 +        for name, space in building.spaces["first_floor"].item
+          +s():                                                          
+      308 +            if name.startswith("stair_") or name.endswith(("_s
+          +tair1", "_stair2")):                                          
+      309 +                cell_cost[FIRST_FLOOR][cells_in(_to_metres(spa
+          +ce))] = COST_STAIRS                                           
+      310 +                                                              
+      311 +        # ---- nodes: lattice cells first, then seats, then wa
+          +lkways                                                        
+      312 +        cell_node = np.full(lattice_shape, -1, np.int32)      
+      313 +        num_cells = int(walkable.sum())                       
+      314 +        cell_node[walkable] = np.arange(num_cells)            
+      315 +        cell_levels, cell_rows, cell_columns = np.nonzero(walk
+          +able)                                                         
+      316 +                                                              
+      317 +        seats, walkways, seat_levels = [], [], []             
+      318 +        for level_index, name in enumerate(LEVEL_NAMES):      
+      319 +            level_seats, level_walkways = building.seats(name)
+          +, building.spawn_points(name)                                 
+      320 +            seats += level_seats                              
+      321 +            walkways += level_walkways                        
+      322 +            seat_levels += [level_index] * len(level_seats)   
+      323 +        num_seats = len(seats)                                
+      324 +        seat_nodes = num_cells + np.arange(num_seats, dtype=np
+          +.int32)                                                       
+      325 +        walkway_nodes = seat_nodes + num_seats                
+      326 +        seat_x = np.array([seat["x"] for seat in seats]) * FT 
+      327 +        seat_y = np.array([seat["y"] for seat in seats]) * FT 
+      328 +        walkway_x = np.array([walkway["x"] for walkway in walk
+          +ways]) * FT                                                   
+      329 +        walkway_y = np.array([walkway["y"] for walkway in walk
+          +ways]) * FT                                                   
+      330 +        seat_levels = np.array(seat_levels, np.int8)          
+      331 +                                                              
+      332 +        node_kind = np.concatenate([np.full(num_cells, NODE_CE
+          +LL, np.int8), np.full(num_seats, NODE_SEAT, np.int8),         
+      333 +                                    np.full(num_seats, NODE_WA
+          +LKWAY, np.int8)])                                             
+      334 +        node_level = np.concatenate([cell_levels.astype(np.int
+          +8), seat_levels, seat_levels])                                
+      335 +        node_x = np.concatenate([center_x[cell_rows, cell_colu
+          +mns], seat_x, walkway_x])                                     
+      336 +        node_y = np.concatenate([center_y[cell_rows, cell_colu
+          +mns], seat_y, walkway_y])                                     
+      337 +        node_cost = np.concatenate([cell_cost[walkable], np.fu
+          +ll(num_seats, COST_SEAT), np.full(num_seats, COST_FLOOR)])    
+      338 +                                                              
+      339 +        # ---- edges                                          
+      340 +        starts: List[np.ndarray] = []                         
+      341 +        stops: List[np.ndarray] = []                          
+      342 +        kinds: List[np.ndarray] = []                          
+      343 +        lengths: List[np.ndarray] = []                        
+      344 +        corners_a: List[np.ndarray] = []                      
+      345 +        corners_b: List[np.ndarray] = []                      
+      346 +                                                              
+      347 +        def add_edges(start, stop, kind, length, corner_a=None
+          +, corner_b=None):                                             
+      348 +            start = np.atleast_1d(start)                      
+      349 +            stop = np.atleast_1d(stop)                        
+      350 +            starts.append(start)                              
+      351 +            stops.append(stop)                                
+      352 +            kinds.append(np.full(len(start), kind, np.int8))  
+      353 +            lengths.append(np.broadcast_to(np.asarray(length, 
+          +float), start.shape))                                         
+      354 +            no_corner = np.full(len(start), -1, np.int32)     
+      355 +            corners_a.append(no_corner if corner_a is None els
+          +e corner_a)                                                   
+      356 +            corners_b.append(no_corner if corner_b is None els
+          +e corner_b)                                                   
+      357 +                                                              
+      358 +        def add_two_way(node_a, node_b, kind, length, corner_a
+          +=None, corner_b=None):                                        
+      359 +            add_edges(node_a, node_b, kind, length, corner_a, 
+          +corner_b)                                                     
+      360 +            add_edges(node_b, node_a, kind, length, corner_a, 
+          +corner_b)                                                     
+      361 +                                                              
+      362 +        for level_index, floor in enumerate(lattice_floors):  
+      363 +            nodes = cell_node[level_index]                    
+      364 +            east, south, south_east, south_west = _open_steps(
+          +walkable[level_index], floor, center_x, center_y)             
+      365 +            rows, columns = np.nonzero(east)                  
+      366 +            add_two_way(nodes[rows, columns], nodes[rows, colu
+          +mns + 1], EDGE_LATTICE, cell_m)                               
+      367 +            rows, columns = np.nonzero(south)                 
+      368 +            add_two_way(nodes[rows, columns], nodes[rows + 1, 
+          +columns], EDGE_LATTICE, cell_m)                               
+      369 +            rows, columns = np.nonzero(south_east)            
+      370 +            add_two_way(nodes[rows, columns], nodes[rows + 1, 
+          +columns + 1], EDGE_LATTICE, cell_m * math.sqrt(2),            
+      371 +                        nodes[rows, columns + 1], nodes[rows +
+          + 1, columns])                                                 
+      372 +            rows, columns = np.nonzero(south_west)            
+      373 +            add_two_way(nodes[rows, columns], nodes[rows + 1, 
+          +columns - 1], EDGE_LATTICE, cell_m * math.sqrt(2),            
+      374 +                        nodes[rows, columns - 1], nodes[rows +
+          + 1, columns])                                                 
+      375 +                                                              
+      376 +        # Seats step out to the walkway but not back: the walk
+          +way is always the cheaper way along                           
+      377 +        # a row, so an edge back into a seat would add nothing
+          + to the graph.                                                
+      378 +        seat_to_walkway = np.hypot(seat_x - walkway_x, seat_y 
+          +- walkway_y)                                                  
+      379 +        add_edges(seat_nodes, walkway_nodes, EDGE_SEAT_WALKWAY
+          +, seat_to_walkway)                                            
+      380 +                                                              
+      381 +        row_index_of: Dict[Tuple[str, str], int] = {}         
+      382 +        members: List[List[int]] = []                         
+      383 +        for seat_index, seat in enumerate(seats):             
+      384 +            row_key = (seat["section"], seat["row"])          
+      385 +            if row_key not in row_index_of:                   
+      386 +                row_index_of[row_key] = len(members)          
+      387 +                members.append([])                            
+      388 +            members[row_index_of[row_key]].append(seat_index) 
+      389 +                                                              
+      390 +        for row_members in members:                           
+      391 +            row_members.sort(key=lambda seat_index: seats[seat
+          +_index]["seat"])                                              
+      392 +            ordered = np.array(row_members)                   
+      393 +            neighbours_a, neighbours_b = ordered[:-1], ordered
+          +[1:]                                                          
+      394 +            if len(neighbours_a):                             
+      395 +                add_two_way(seat_nodes[neighbours_a], seat_nod
+          +es[neighbours_b], EDGE_SEAT_SEAT,                             
+      396 +                            np.hypot(seat_x[neighbours_a] - se
+          +at_x[neighbours_b], seat_y[neighbours_a] - seat_y[neighbours_b
+          +]))                                                           
+      397 +                add_two_way(walkway_nodes[neighbours_a], walkw
+          +ay_nodes[neighbours_b], EDGE_WALKWAY_WALKWAY,                 
+      398 +                            np.hypot(walkway_x[neighbours_a] -
+          + walkway_x[neighbours_b], walkway_y[neighbours_a] - walkway_y[
+          +neighbours_b]))                                               
+      399 +                                                              
+      400 +            for end_seat in {int(ordered[0]), int(ordered[-1])
+          +}:                                                            
+      401 +                level_index = int(seat_levels[end_seat])      
+      402 +                link = _row_link(walkway_x[end_seat], walkway_
+          +y[end_seat], node_x[:num_cells],                              
+      403 +                                 node_y[:num_cells], cell_leve
+          +ls == level_index, walkable_areas[level_index])               
+      404 +                if link is not None:                          
+      405 +                    add_two_way(walkway_nodes[end_seat], link[
+          +0], EDGE_ROW_LINK, link[1])                                   
+      406 +                                                              
+      407 +        first_floor_cells = np.nonzero(cell_levels == FIRST_FL
+          +OOR)[0]                                                       
+      408 +        for stair in building.stairs:                         
+      409 +            if stair.name not in STAIR_HEAD_DOORS:            
+      410 +                continue                                      
+      411 +            head_door = door_names.index(STAIR_HEAD_DOORS[stai
+          +r.name])                                                      
+      412 +            head_cells = cell_node[BALCONY][door_id[BALCONY] =
+          += head_door]                                                  
+      413 +            landing_x, landing_y = stair.p_to[0] * FT, stair.p
+          +_to[1] * FT                                                   
+      414 +            nearest = np.argmin(np.hypot(node_x[first_floor_ce
+          +lls] - landing_x, node_y[first_floor_cells] - landing_y))     
+      415 +            landing_cells = np.full(len(head_cells), first_flo
+          +or_cells[nearest], np.int32)                                  
+      416 +            add_edges(head_cells, landing_cells, EDGE_STAIR, s
+          +tair.length * FT)                                             
+      417 +                                                              
+      418 +        edge_from = np.concatenate(starts).astype(np.int32)   
+      419 +        edge_to = np.concatenate(stops).astype(np.int32)      
+      420 +        edge_kind = np.concatenate(kinds)                     
+      421 +        edge_length = np.concatenate(lengths)                 
+      422 +        edge_cost = edge_length * node_cost[edge_to]          
+      423 +        # A stair's cost belongs to the whole flight, not to t
+          +he floor cell it lands on.                                    
+      424 +        is_stair = edge_kind == EDGE_STAIR                    
+      425 +        edge_cost[is_stair] = edge_length[is_stair] * COST_STA
+          +IRS                                                           
+      426 +                                                              
+      427 +        row_names = [f"{section}/{row}" for section, row in ro
+          +w_index_of]                                                   
+      428 +        seat_row = np.array([row_index_of[(seat["section"], se
+          +at["row"])] for seat in seats], np.int32)                     
+      429 +        seat_number = np.array([seat["seat"] for seat in seats
+          +], np.int32)                                                  
+      430 +                                                              
+      431 +        grid = cls(cell_m, x0, y0, walkable, exit_id, door_id,
+          + np.full(lattice_shape, np.inf),                              
+      432 +                   seat_nodes, [seat["section"] for seat in se
+          +ats], exit_names, door_names, "both",                         
+      433 +                   cell_cost, cell_node, node_kind, node_level
+          +, node_x, node_y, node_cost,                                  
+      434 +                   np.full(len(node_kind), np.inf), edge_from,
+          + edge_to, edge_kind, edge_length, edge_cost,                  
+      435 +                   np.concatenate(corners_a).astype(np.int32),
+          + np.concatenate(corners_b).astype(np.int32),                  
+      436 +                   walkway_nodes, seat_row, seat_number, row_n
+          +ames)                                                         
+      437 +        grid.node_dist = grid.node_distance_field()           
+      438 +        grid.dist = grid._lattice_values(grid.node_dist)      
+      439 +        return grid                                           
+      440 +                                                              
+      441 +    # --------------------------------------------------------
+          +-------- masks --                                             
+      442 +    def exit_mask(self, labels: Union[str, Iterable[str], None
+          +] = None) -> np.ndarray:                                      
+      443 +        """Lattice mask of the named exits, or of all exits.  
+          +Use it as a target or to block a gate."""                     
+      444 +        if labels is None:                                    
+      445 +            return self.exit_id >= 0                          
+      446 +        names = [labels] if isinstance(labels, str) else list(
+          +labels)                                                       
+      447 +        return np.isin(self.exit_id, [self.exits.index(name) f
+          +or name in names])                                            
+      448 +                                                              
+      449 +    def door_mask(self, names: Union[str, Iterable[str]]) -> n
+          +p.ndarray:                                                    
+      450 +        """Lattice mask of the named model doors, for closing 
+          +an interior door."""                                          
+      451 +        names = [names] if isinstance(names, str) else list(na
+          +mes)                                                          
+      452 +        return np.isin(self.door_id, [self.doors.index(name) f
+          +or name in names])                                            
+      453 +                                                              
+      454 +    def _node_mask(self, mask: np.ndarray) -> np.ndarray:     
+      455 +        mask = np.asarray(mask, bool)                         
+      456 +        if mask.shape == (self.num_nodes,):                   
+      457 +            return mask                                       
+      458 +        if mask.shape != self.shape:                          
+      459 +            raise ValueError(f"mask shape {mask.shape} matches
+          + neither the lattice {self.shape} "                           
+      460 +                             f"nor the node count ({self.num_n
+          +odes},)")                                                     
+      461 +        node_mask = np.zeros(self.num_nodes, bool)            
+      462 +        node_mask[self.cell_node[self.walkable & mask]] = True
+      463 +        return node_mask                                      
+      464 +                                                              
+      465 +    def _lattice_values(self, node_values: np.ndarray) -> np.n
+          +darray:                                                       
+      466 +        values = np.full(self.shape, np.inf)                  
+      467 +        values[self.walkable] = node_values[self.cell_node[sel
+          +f.walkable]]                                                  
+      468 +        return values                                         
+      469 +                                                              
+      470      # --------------------------------------------------------
+           ----- algorithms --
+      133 -    def distance_field(self, targets: np.ndarray, blocked: Opt
+          -ional[np.ndarray] = None) -> np.ndarray:                      
+      134 -        """Dijkstra over walkable cells (8-connected, diagonal
+          - = sqrt 2) from all target cells.                             
+      135 -        Returns distances in FEET; inf where unreachable.  Pas
+          -s `blocked` (bool mask) to close                              
+      136 -        doors / add barriers without rebuilding the grid."""  
+      137 -        H, W = self.shape                                     
+      138 -        free = self.walkable.copy()                           
+      139 -        if blocked is not None:                               
+      140 -            free &= ~blocked                                  
+      141 -        dist = np.full((H, W), np.inf)                        
+      471 +    def node_distance_field(self, targets: Optional[np.ndarray
+          +] = None,                                                     
+      472 +                            blocked: Optional[np.ndarray] = No
+          +ne) -> np.ndarray:                                            
+      473 +        """Cheapest cost from every node to the nearest target
+          +; inf where unreachable.                                      
+      474 +                                                              
+      475 +        `targets` and `blocked` are lattice masks (2, H, W) or
+          + node masks (nodes,).  Targets                                
+      476 +        default to all exits.  Edges are directed, so the sear
+          +ch runs backwards from the targets                            
+      477 +        along incoming edges: searching forwards would let peo
+          +ple climb the one-way stairs."""                              
+      478 +        target_nodes = self._node_mask(self.exit_mask() if tar
+          +gets is None else targets)                                    
+      479 +        blocked_nodes = np.zeros(self.num_nodes, bool) if bloc
+          +ked is None else self._node_mask(blocked)                     
+      480 +        is_blocked = blocked_nodes.tolist()                   
+      481 +                                                              
+      482 +        order = np.argsort(self.edge_to, kind="stable")       
+      483 +        offsets = np.searchsorted(self.edge_to[order], np.aran
+          +ge(self.num_nodes + 1)).tolist()                              
+      484 +        edge_starts = self.edge_from[order].tolist()          
+      485 +        edge_costs = self.edge_cost[order].tolist()           
+      486 +        corners_a = self.edge_corner_a[order].tolist()        
+      487 +        corners_b = self.edge_corner_b[order].tolist()        
+      488 +                                                              
+      489 +        best = [math.inf] * self.num_nodes                    
+      490          heap = []
+      143 -        for i, j in zip(*np.nonzero(targets & free)):         
+      144 -            dist[i, j] = 0.0                                  
+      145 -            heap.append((0.0, int(i), int(j)))                
+      491 +        for node in np.nonzero(target_nodes & ~blocked_nodes)[
+          +0].tolist():                                                  
+      492 +            best[node] = 0.0                                  
+      493 +            heap.append((0.0, node))                          
+      494          heapq.heapify(heap)
+      147 -        nb = [(-1, 0, 1), (1, 0, 1), (0, -1, 1), (0, 1, 1),   
+      148 -              (-1, -1, math.sqrt(2)), (-1, 1, math.sqrt(2)), (
+          -1, -1, math.sqrt(2)), (1, 1, math.sqrt(2))]                   
+      495          while heap:
+      150 -            d, i, j = heapq.heappop(heap)                     
+      151 -            if d > dist[i, j]:                                
+      496 +            cost, node = heapq.heappop(heap)                  
+      497 +            if cost > best[node]:                             
+      498                  continue
+      153 -            for di, dj, w in nb:                              
+      154 -                a, b = i + di, j + dj                         
+      155 -                if 0 <= a < H and 0 <= b < W and free[a, b]:  
+      156 -                    if w > 1 and not (free[i, b] and free[a, j
+          -]):   # no corner cutting through walls                       
+      157 -                        continue                              
+      158 -                    nd = d + w                                
+      159 -                    if nd < dist[a, b]:                       
+      160 -                        dist[a, b] = nd                       
+      161 -                        heapq.heappush(heap, (nd, a, b))      
+      162 -        return dist * self.cell                               
+      499 +            for edge in range(offsets[node], offsets[node + 1]
+          +):                                                            
+      500 +                previous = edge_starts[edge]                  
+      501 +                if is_blocked[previous]:                      
+      502 +                    continue                                  
+      503 +                # A closed cell must also stop diagonals from 
+          +slipping past its corner.                                     
+      504 +                corner_a, corner_b = corners_a[edge], corners_
+          +b[edge]                                                       
+      505 +                if corner_a >= 0 and (is_blocked[corner_a] or 
+          +is_blocked[corner_b]):                                        
+      506 +                    continue                                  
+      507 +                new_cost = cost + edge_costs[edge]            
+      508 +                if new_cost < best[previous]:                 
+      509 +                    best[previous] = new_cost                 
+      510 +                    heapq.heappush(heap, (new_cost, previous))
+      511 +        return np.array(best)                                 
+      512  
+      513 +    def distance_field(self, targets: Optional[np.ndarray] = N
+          +one,                                                          
+      514 +                       blocked: Optional[np.ndarray] = None) -
+          +> np.ndarray:                                                 
+      515 +        """Lattice view of node_distance_field, shape (2, H, W
+          +).  Seats and walkways are in                                 
+      516 +        node_distance_field.  Pass `blocked` to close a gate w
+          +ithout rebuilding the grid."""                                
+      517 +        return self._lattice_values(self.node_distance_field(t
+          +argets, blocked))                                             
+      518 +                                                              
+      519      def components(self) -> np.ndarray:
+      165 -        """label connected walkable regions (4-connected); 0 =
+          - not walkable"""                                              
+      166 -        from scipy import ndimage                             
+      167 -        lab, _ = ndimage.label(self.walkable)                 
+      168 -        return lab                                            
+      520 +        """Connected-component label per node, ignoring edge d
+          +irection."""                                                  
+      521 +        return _connected_labels(self.num_nodes, self.edge_fro
+          +m, self.edge_to)                                              
+      522  
+      523      # --------------------------------------------------------
+           -------- io / viz --
+      524      def save(self, path: str):
+      172 -        np.savez_compressed(path, cell=self.cell, x0=self.x0, 
+          -y0=self.y0, walkable=self.walkable,                           
+      173 -                            exit_id=self.exit_id, door_id=self
+          -.door_id, dist=self.dist, spawn=self.spawn,                   
+      174 -                            seat_section=np.array(self.seat_se
+          -ction), exits=np.array(self.exits),                           
+      175 -                            doors=np.array(self.doors), level=
+          -self.level)                                                   
+      525 +        np.savez_compressed(                                  
+      526 +            path, format_version=FORMAT_VERSION, cell=self.cel
+          +l, x0=self.x0, y0=self.y0,                                    
+      527 +            level=self.level, seat_section=np.array(self.seat_
+          +section), exits=np.array(self.exits),                         
+      528 +            doors=np.array(self.doors), row_names=np.array(sel
+          +f.row_names),                                                 
+      529 +            **{name: getattr(self, name) for name in _ARRAY_FI
+          +ELDS})                                                        
+      530  
+      531      @classmethod
+      532      def load(cls, path: str) -> "Grid":
+      179 -        z = np.load(path, allow_pickle=False)                 
+      180 -        return cls(float(z["cell"]), float(z["x0"]), float(z["
+          -y0"]), z["walkable"], z["exit_id"], z["door_id"],             
+      181 -                   z["dist"], z["spawn"], list(z["seat_section
+          -"]), list(z["exits"]), list(z["doors"]), str(z["level"]))     
+      533 +        with np.load(path, allow_pickle=False) as archive:    
+      534 +            if "format_version" not in archive.files or int(ar
+          +chive["format_version"]) != FORMAT_VERSION:                   
+      535 +                raise ValueError(f"{path} was written by an ol
+          +der grid.py (lengths in feet, no graph); "                    
+      536 +                                 "rebuild it with Grid.from_mo
+          +del")                                                         
+      537 +            return cls(cell=float(archive["cell"]), x0=float(a
+          +rchive["x0"]), y0=float(archive["y0"]),                       
+      538 +                       level=str(archive["level"]), seat_secti
+          +on=archive["seat_section"].tolist(),                          
+      539 +                       exits=archive["exits"].tolist(), doors=
+          +archive["doors"].tolist(),                                    
+      540 +                       row_names=archive["row_names"].tolist()
+          +,                                                             
+      541 +                       **{name: archive[name] for name in _ARR
+          +AY_FIELDS})                                                   
+      542  
+      543      def render(self, path: str):
+      544          import matplotlib
+      545          matplotlib.use("Agg")
+      546          import matplotlib.pyplot as plt
+      187 -        H, W = self.shape                                     
+      188 -        ext = (self.x0, self.x0 + W * self.cell, self.y0 - H *
+          - self.cell, self.y0)                                          
+      189 -        fig, ax = plt.subplots(figsize=(10, 10 * H / W), dpi=1
+          -40)                                                           
+      190 -        d = np.where(np.isfinite(self.dist), self.dist, np.nan
+          -)                                                             
+      191 -        ax.imshow(np.where(self.walkable, 1.0, np.nan), extent
+          -=ext, cmap="Greys", vmin=0, vmax=3, interpolation="nearest")  
+      192 -        im = ax.imshow(d, extent=ext, cmap="viridis", interpol
+          -ation="nearest")                                              
+      193 -        ax.imshow(np.where(self.exit_id >= 0, 1.0, np.nan), ex
+          -tent=ext, cmap="autumn", vmin=0, vmax=1, interpolation="neares
+          -t")                                                           
+      194 -        xs, ys = self.xy(self.spawn[:, 0], self.spawn[:, 1])  
+      195 -        ax.scatter(xs, ys, s=0.5, c="w")                      
+      196 -        plt.colorbar(im, ax=ax, label="walking distance to nea
+          -rest exit [ft]", shrink=0.6)                                  
+      197 -        ax.set_title(f"{self.level}: {W}x{H} cells of {self.ce
+          -ll:g} ft ({self.cell_m:.2f} m), "                             
+      198 -                     f"{int(self.walkable.sum())} walkable cel
+          -ls, {len(self.spawn)} people")                                
+      199 -        ax.set_xlabel("x east [ft]"); ax.set_ylabel("y north [
+          -ft]")                                                         
+      200 -        fig.savefig(path, bbox_inches="tight"); plt.close(fig)
+      547  
+      548 +        _, num_rows, num_columns = self.shape                 
+      549 +        extent = (self.x0, self.x0 + num_columns * self.cell, 
+          +self.y0 - num_rows * self.cell, self.y0)                      
+      550 +        finite_costs = self.node_dist[np.isfinite(self.node_di
+          +st)]                                                          
+      551 +        color_scale = dict(cmap="Blues_r", vmin=0.0, vmax=floa
+          +t(finite_costs.max()))                                        
+      552 +        figure, axes = plt.subplots(1, 2, figsize=(15, 8.2), d
+          +pi=140, constrained_layout=True)                              
+      553 +        image = None                                          
+      554 +        for level_index, axis in enumerate(axes):             
+      555 +            image = axis.imshow(np.where(self.walkable[level_i
+          +ndex], self.dist[level_index], np.nan),                       
+      556 +                                extent=extent, interpolation="
+          +nearest", **color_scale)                                      
+      557 +            on_level = self.node_level == level_index         
+      558 +            walkway = on_level & (self.node_kind == NODE_WALKW
+          +AY)                                                           
+      559 +            seat = on_level & (self.node_kind == NODE_SEAT)   
+      560 +            axis.scatter(self.node_x[walkway], self.node_y[wal
+          +kway], c=self.node_dist[walkway], s=5,                        
+      561 +                         linewidths=0, **color_scale)         
+      562 +            axis.scatter(self.node_x[seat], self.node_y[seat],
+          + c="#8a8a8a", s=2.5, linewidths=0)                            
+      563  
+      564 +            is_stair = (self.edge_kind == EDGE_STAIR) & (self.
+          +node_level[self.edge_from] == level_index)                    
+      565 +            axis.scatter(self.node_x[self.edge_from[is_stair]]
+          +, self.node_y[self.edge_from[is_stair]],                      
+      566 +                         marker="v", s=14, c="#111111", linewi
+          +dths=0)                                                       
+      567 +            for exit_index, label in enumerate(self.exits):   
+      568 +                rows, columns = np.nonzero(self.exit_id[level_
+          +index] == exit_index)                                         
+      569 +                if len(rows) == 0:                            
+      570 +                    continue                                  
+      571 +                x_values, y_values = self.xy(rows, columns)   
+      572 +                axis.scatter(x_values, y_values, marker="s", s
+          +=9, c="#d1495b", linewidths=0)                                
+      573 +                # A portico label covers two separate doors, s
+          +o split the cells at any gap in y.                            
+      574 +                by_y = np.argsort(y_values)                   
+      575 +                door_groups = np.split(by_y, np.nonzero(np.dif
+          +f(y_values[by_y]) > 2 * self.cell)[0] + 1)                    
+      576 +                for group in door_groups:                     
+      577 +                    axis.annotate(label, (x_values[group].mean
+          +(), y_values[group].mean()), xytext=(0, -11),                 
+      578 +                                  textcoords="offset points", 
+          +ha="center", fontsize=8, color="#222222")                     
+      579 +            axis.set_title(f"{LEVEL_NAMES[level_index].replace
+          +('_', ' ')}: "                                                
+      580 +                           f"{int(self.walkable[level_index].s
+          +um())} cells, {int(seat.sum())} seats", fontsize=11)          
+      581 +            axis.set_xlabel("x east [m]")                     
+      582 +            axis.set_ylabel("y north [m]")                    
+      583 +            axis.set_aspect("equal")                          
+      584 +            axis.set_facecolor("#f4f2ee")                     
+      585 +            axis.tick_params(length=0, labelsize=8)           
+      586 +            for spine in axis.spines.values():                
+      587 +                spine.set_visible(False)                      
+      588 +        figure.colorbar(image, ax=list(axes), shrink=0.7, labe
+          +l="weighted cost to the nearest exit [m]")                    
+      589 +        figure.suptitle(f"Hybrid grid: {self.cell:g} m lattice
+          + with seat and walkway nodes. "                               
+      590 +                        "Red squares are exits, black triangle
+          +s are one-way stair heads.", fontsize=12)                     
+      591 +        figure.savefig(path, bbox_inches="tight")             
+      592 +        plt.close(figure)                                     
+      593 +                                                              
+      594 +                                                              
+      595 +_ARRAY_FIELDS = ("walkable", "exit_id", "door_id", "dist", "sp
+          +awn", "cell_cost", "cell_node", "node_kind",                  
+      596 +                 "node_level", "node_x", "node_y", "node_cost"
+          +, "node_dist", "edge_from", "edge_to", "edge_kind",           
+      597 +                 "edge_length", "edge_cost", "edge_corner_a", 
+          +"edge_corner_b", "walkway_nodes", "seat_row",                 
+      598 +                 "seat_number")                               
+      599 +                                                              
+      600 +                                                              
+      601 +def validate(grid: Grid) -> List[str]:                        
+      602 +    """Print the structural report and return a list of failur
+          +es (empty = valid)."""                                        
+      603 +    failures: List[str] = []                                  
+      604 +                                                              
+      605 +    def check(passed: bool, description: str):                
+      606 +        print(f"  [{'ok' if passed else 'FAIL'}] {description}
+          +")                                                            
+      607 +        if not passed:                                        
+      608 +            failures.append(description)                      
+      609 +                                                              
+      610 +    print("seats")                                            
+      611 +    seat_mask = grid.node_kind == NODE_SEAT                   
+      612 +    walkway_mask = grid.node_kind == NODE_WALKWAY             
+      613 +    seat_positions = {(int(level), round(float(x), 4), round(f
+          +loat(y), 4)) for level, x, y in                               
+      614 +                      zip(grid.node_level[seat_mask], grid.nod
+          +e_x[seat_mask], grid.node_y[seat_mask])}                      
+      615 +    check(len(np.unique(grid.spawn)) == 1329 and len(seat_posi
+          +tions) == 1329,                                               
+      616 +          f"{len(np.unique(grid.spawn))} seat nodes at {len(se
+          +at_positions)} distinct positions (want 1329)")               
+      617 +    section_counts = {group: 0 for group in Model.OFFICIAL_SEA
+          +TS}                                                           
+      618 +    for section in grid.seat_section:                         
+      619 +        section_counts[Model.section_group(section)] += 1     
+      620 +    check(section_counts == Model.OFFICIAL_SEATS, f"section co
+          +unts {section_counts}")                                       
+      621 +    check(int(walkway_mask.sum()) == int(seat_mask.sum()), f"{
+          +int(walkway_mask.sum())} walkway nodes, one per seat")        
+      622 +                                                              
+      623 +    print("nodes and edges")                                  
+      624 +    node_keys = np.column_stack([grid.node_kind, grid.node_lev
+          +el, np.round(grid.node_x, 4), np.round(grid.node_y, 4)])      
+      625 +    check(len(np.unique(node_keys, axis=0)) == grid.num_nodes,
+          + f"{grid.num_nodes} nodes, no duplicates")                    
+      626 +    edge_keys = np.column_stack([grid.edge_from, grid.edge_to]
+          +)                                                             
+      627 +    check(len(np.unique(edge_keys, axis=0)) == len(edge_keys),
+          + f"{len(edge_keys)} directed edges, no duplicates")           
+      628 +    check(bool((grid.edge_from != grid.edge_to).all()), "no se
+          +lf-loops")                                                    
+      629 +    for kind, name in enumerate(EDGE_KIND_NAMES):             
+      630 +        chosen = grid.edge_kind == kind                       
+      631 +        print(f"       {name:16s}{int(chosen.sum()):7d} edges,
+          + length {grid.edge_length[chosen].min():.3f}"                 
+      632 +              f"-{grid.edge_length[chosen].max():.3f} m")     
+      633 +                                                              
+      634 +    lattice_lengths = grid.edge_length[grid.edge_kind == EDGE_
+          +LATTICE]                                                      
+      635 +    straight = np.isclose(lattice_lengths, grid.cell)         
+      636 +    diagonal = np.isclose(lattice_lengths, grid.cell * math.sq
+          +rt(2))                                                        
+      637 +    check(bool((straight | diagonal).all()), f"lattice steps a
+          +re {grid.cell:g} m or {grid.cell * math.sqrt(2):.3f} m")      
+      638 +    not_stairs = grid.edge_kind != EDGE_STAIR                 
+      639 +    check(bool(np.allclose(grid.edge_cost[not_stairs],        
+      640 +                           grid.edge_length[not_stairs] * grid
+          +.node_cost[grid.edge_to[not_stairs]])),                       
+      641 +          "edge cost = length x entry cost of the destination"
+          +)                                                             
+      642 +    stairs = ~not_stairs                                      
+      643 +    check(bool((grid.node_level[grid.edge_from[stairs]] == BAL
+          +CONY).all()                                                   
+      644 +               and (grid.node_level[grid.edge_to[stairs]] == F
+          +IRST_FLOOR).all()),                                           
+      645 +          f"{int(stairs.sum())} stair links, all one-way down 
+          +(cost {grid.edge_cost[stairs].max():.2f})")                   
+      646 +    crossing = grid.node_level[grid.edge_from] != grid.node_le
+          +vel[grid.edge_to]                                             
+      647 +    check(bool((grid.edge_kind[crossing] == EDGE_STAIR).all())
+          +, "only stair links change level")                            
+      648 +                                                              
+      649 +    print("exits")                                            
+      650 +    check(len(grid.exits) == 11, f"{len(grid.exits)} exit labe
+          +ls")                                                          
+      651 +    for exit_index, label in enumerate(grid.exits):           
+      652 +        cells = grid.exit_id == exit_index                    
+      653 +        check(bool(cells.any()), f"{label}: {int(cells.sum())}
+          + cells")                                                      
+      654 +                                                              
+      655 +    print("reachability")                                     
+      656 +    reachable = np.isfinite(grid.node_dist)                   
+      657 +    unreachable = np.nonzero(~reachable)[0]                   
+      658 +    for kind, name in enumerate(NODE_KIND_NAMES):             
+      659 +        for level, level_name in enumerate(LEVEL_NAMES):      
+      660 +            chosen = (grid.node_kind == kind) & (grid.node_lev
+          +el == level)                                                  
+      661 +            print(f"       {name:8s} {level_name:12s}{int(chos
+          +en.sum()):6d} nodes, "                                        
+      662 +                  f"{int((chosen & ~reachable).sum())} unreach
+          +able")                                                        
+      663 +    check(len(unreachable) == 0, f"{grid.num_nodes - len(unrea
+          +chable)} of {grid.num_nodes} nodes reach an exit")            
+      664 +    for node in unreachable[:20].tolist():                    
+      665 +        print(f"       unreachable: {NODE_KIND_NAMES[grid.node
+          +_kind[node]]} on {LEVEL_NAMES[grid.node_level[node]]} "       
+      666 +              f"at ({grid.node_x[node]:.2f}, {grid.node_y[node
+          +]:.2f}) m")                                                   
+      667 +    seat_costs = grid.node_dist[grid.spawn]                   
+      668 +    print(f"       seat cost to the nearest exit: median {np.m
+          +edian(seat_costs):.1f}, worst {seat_costs.max():.1f}")        
+      669 +                                                              
+      670 +    print("closing gates without a rebuild")                  
+      671 +    for label in grid.exits:                                  
+      672 +        field = grid.node_distance_field(blocked=grid.exit_mas
+          +k(label))                                                     
+      673 +        stranded = int((~np.isfinite(field[grid.spawn])).sum()
+          +)                                                             
+      674 +        check(stranded == 0, f"{label} closed: {stranded} seat
+          +s stranded")                                                  
+      675 +                                                              
+      676 +    return failures                                           
+      677 +                                                              
+      678 +                                                              
+      679  if __name__ == "__main__":
+      204 -    cell = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5   
+      205 -    level = sys.argv[2] if len(sys.argv) > 2 else "flat"      
+      206 -    g = Grid.from_model(level=level, cell_ft=cell)            
+      207 -    lab = g.components()                                      
+      208 -    comp_of_spawn = set(lab[g.spawn[:, 0], g.spawn[:, 1]].toli
+          -st())                                                         
+      209 -    reach = np.isfinite(g.dist[g.spawn[:, 0], g.spawn[:, 1]]) 
+      210 -    print(f"{level}: grid {g.shape[1]}x{g.shape[0]} @ {cell} f
+          -t, walkable {int(g.walkable.sum())} cells, "                  
+      211 -          f"{len(g.exits)} exits, {len(g.spawn)} spawn cells i
+          -n {len(comp_of_spawn)} component(s), "                        
+      212 -          f"{int(reach.sum())} can reach an exit, farthest sea
+          -t {np.nanmax(g.dist[g.spawn[:,0], g.spawn[:,1]][reach]):.0f} f
+          -t")                                                           
+      213 -    out = os.path.join(HERE, "out", f"grid_{level}_{cell:g}ft"
+          -)                                                             
+      214 -    g.save(out + ".npz"); g.render(out + ".png"); print(out + 
+          -".npz", out + ".png")                                         
+      680 +    cell_size = float(sys.argv[1]) if len(sys.argv) > 1 else 0
+          +.5                                                            
+      681 +    built_grid = Grid.from_model(cell_m=cell_size)            
+      682 +    print(f"lattice {built_grid.shape[2]}x{built_grid.shape[1]
+          +} at {cell_size:g} m on 2 levels, "                           
+      683 +          f"{built_grid.num_nodes} nodes, {len(built_grid.edge
+          +_from)} directed edges, {len(built_grid.exits)} exits")       
+      684 +    problems = validate(built_grid)                           
+      685 +    output_stem = os.path.join(HERE, "out", f"grid_hybrid_{cel
+          +l_size:g}m")                                                  
+      686 +    built_grid.save(output_stem + ".npz")                     
+      687 +    built_grid.render(output_stem + ".png")                   
+      688 +    print(output_stem + ".npz", output_stem + ".png")         
+      689 +    if problems:                                              
+      690 +        print(f"{len(problems)} validation failure(s):")      
+      691 +        for problem in problems:                              
+      692 +            print(f"  {problem}")                             
+      693 +        sys.exit(1)                                           
+      694 +    print("all checks passed")                                
+
+● Bash(cd "C:/Users/jason/OneDrive/Documents/GitHub/CMCM26/bailey_hall" &&
+      python -B grid.py 2>&1 | tail -70)
+  ⎿  lattice 90x80 at 0.5 m on 2 levels, 5107 nodes, 21653 directed edges,
+     11 exits
+     seats
+     … +67 lines (ctrl+o to expand)
+  ⎿  2 files changed (binary, mode only or too large to show)
+
+● All checks pass except one: 14 cells near (0, −9.25 m) have no route to an
+  exit. I'll first confirm whether that pocket is truly sealed or is a
+  connectivity bug, then list every island size and run stricter wall-crossing
+  checks.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The dead zone is sealed floor, not a bug, so I'll raise the pocket threshold
+  to 20 to remove it while keeping the 30-cell box pockets. Next I'll test the
+  walls, stairs and API.
+
+● Update(bailey_hall\grid.py)
+  ⎿  Added 5 lines, removed 3 lines
+      78  # Stairs that get a one-way link.  The stage-side stairs have n
+          one because BW/BE end at the door.
+      79  STAIR_HEAD_DOORS = {"stair_SW": "balcony_exit_SW", "stair_SE": 
+          "balcony_exit_SE"}
+      80  
+      81 -# Fragments smaller than this are left over from cutting seats 
+         -out of the lattice.  Linking a row                             
+      82 -# to one would strand the row, while the larger pockets beside 
+         -the boxes are real floor.                                      
+      83 -MIN_ISLAND_CELLS = 4                                           
+      81 +# Smaller lattice islands cannot be reached by anyone, so they 
+         +are removed.  Most are slivers left                            
+      82 +# by cutting out the seats, and the largest (14 cells) is the f
+         +loor behind orchestra row T, whose                             
+      83 +# only way in is an 8 cm gap at the row corners.  The 30-cell p
+         +ockets between the north and south                             
+      84 +# boxes must stay: they are real floor, reached through the end
+         +s of the box rows.                                             
+      85 +MIN_ISLAND_CELLS = 20                                          
+      86  
+      87  # A row end further than this from open floor faces a wall rath
+          er than an aisle.
+      88  MAX_ROW_LINK_M = 1.83
+
+● Bash(SP="C:/Users/jason/AppData/Local/Temp/claude/89b9c43069ee76cb/83725f51-bf
+      76-4706-9a8b-be3c65e0996e/scratchpad"
+      cat > "$SP/check2.py" <<'EOF'…)
+  ⎿  lattice 90x80 at 0.5 m on 2 levels, 5093 nodes, 21621 directed edges,
+     11 exits
+            lattice           15014 edges, length 0.500-0.707 m
+     … +37 lines (ctrl+o to expand)
+  ⎿  2 files changed (binary, mode only or too large to show)
+  Read 1 file (ctrl+o to expand)
+
+● All checks pass, but W4 (the loge doors) and W2 (36 stranded seats) need a
+  closer look before I trust them. I'll investigate both, then update the figure
+  and exports.
+
+● Bash(SP="C:/Users/jason/AppData/Local/Temp/claude/89b9c43069ee76cb/83725f51-bf
+      76-4706-9a8b-be3c65e0996e/scratchpad"
+      cd "C:/Users/jason/OneDrive/Documents/GitHub/CMCM…)
+  ⎿  {'first_floor': (1013, 1013), 'balcony': (316, 316)} wall ['corridor_W
+     _132_wall', 'corridor_E_132_wall']
+     all checks passed
+     … +12 lines (ctrl+o to expand)
+  ⎿  Updated bailey_hall\README.md (+29 -3)
+       6  ```
+       7  bailey_hall/
+       8    model.py            geometry: Params (feet) -> shapely polygo
+          ns, doors, seats, stairs, exports
+       9 +  grid.py             hybrid grid for a simulation: 0.5 m latti
+         +ce plus seat and walkway graph (metres)                        
+      10    render.py           overlays on the PDF plans (sanity check) 
+          and clean figures / SVG
+      11    jps_smoke.py        JuPedSim run: 1,329 agents, nearest exit,
+           until the hall is empty
+      12    bailey_hall.json    full export in METRES (walkable areas, sp
+          aces, obstacles, doors, seats,
+     ...
+      21  ```
+      22  .venv/bin/python bailey_hall/model.py            # areas, door 
+          count, seat counts
+      23  .venv/bin/python bailey_hall/render.py all       # out/overlay_
+          *.png, model_*.png, model.svg
+      24 +.venv/bin/python bailey_hall/grid.py             # build, valid
+         +ate, out/grid_hybrid_0.5m.npz + .png                           
+      25  .venv/bin/python bailey_hall/jps_smoke.py 300    # quick JuPedS
+          im run with 300 people
+      26  .venv/bin/python bailey_hall/jps_smoke.py        # full house (
+          slow, ~1 h, see below)
+      27  ```
+     ...
+      83    stage-side stairs 20004/20003 at the north end of the rear ai
+          sles (3.5 ft, land in room 132/10060).
+      84  
+      85  Seats: rows are obstacles of depth `seat_depth` = 1.5 ft leavin
+          g 1.33 ft (orchestra) / 1.5 ft
+      84 -(loge) clear between rows. `Model.seats()` samples seats at 20"
+         - along each row and thins/packs                                
+      85 -them to the official capacities 527 / 486 / 316 (the chair layo
+         -uts contain gaps for columns,                                  
+      86 -'MB' chairs and wheelchairs that are not drawn). `Model.spawn_p
+         -oints()` moves each seat into the                              
+      86 +(loge) clear between rows. `Model.seats()` samples seats at 20"
+         + along each row, packs a short                                 
+      87 +group by stepping the pitch down (19.0" orchestra, 19.4" loge),
+         + then thins evenly to exactly the                              
+      88 +official capacities 527 / 486 / 316 (the chair layouts contain 
+         +gaps for columns, 'MB' chairs and                              
+      89 +wheelchairs that are not drawn). The balcony stays at 20" and i
+         +s thinned from 399, so 75 of its                               
+      90 +seat gaps are about 1 m rather than 0.5 m. `Model.spawn_points(
+         +)` moves each seat into the                                    
+      91  clear strip in front of its row - use those as agent start posi
+          tions.
+      92  
+      93  Judgement calls are tagged `# ASSUMPTION` in `model.py` (stage-
+          escape route, stair lengths,
+     ...
+       99  * `Model.flattened()` -> single polygon with the balcony mirro
+           red south of the foyer and the
+      100    two main balcony stairs drawn as corridors (42 ft at level s
+           peed ~ 30 ft of stair at stair
+      101    speed). The stage-side balcony stairs become direct exits (a
+           dd ~30 s for the stair).
+      102 +  `grid.py` no longer uses this layout, because it keeps both 
+          +levels in one coordinate frame.                               
+      103  * `bailey_hall.json` has the same content as GeoJSON geometrie
+           s for any other tool
+      104    (Godot, a browser canvas, Mesa, Vadere...).
+      105  
+      106 +## Hybrid grid (`grid.py`)                                    
+      107 +                                                              
+      108 +`Grid.from_model(cell_m=0.5)` builds one directed graph over b
+          +oth levels. Everything is in metres.                          
+      109 +                                                              
+      110 +* Open floor (aisles, corridors, foyer, stairs, doors) is a 0.
+          +5 m lattice with eight neighbours and                         
+     … 19 more lines (ctrl+o to expand)
+  ⎿  … 4 more files changed
+  ⎿  (timeout 5m)
+
+  Read 1 file (ctrl+o to expand)
+
+● The hybrid grid is built and passes every validation check: 1,329 seats (527 /
+  486 / 316), 5,093 nodes, 21,621 directed edges and 11 exits, and every node 
+  reaches an exit. Nothing is committed yet.
+
+  Beyond the built-in validation, I ran these tests with gates closed, without
+  rebuilding the grid:
+
+  ┌─────────────────────────────────┬───────────────────────────────────────┐
+  │              Test               │                Result                 │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Close any one of the 11 exits   │ No seats stranded                     │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Close the 3 foyer doors         │ No seat reaches F1–F5, so the foyer   │
+  │                                 │ wall holds                            │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Close all orchestra and         │ No orchestra seat gets out, so the    │
+  │ stage-escape stairs             │ barrier holds                         │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Close the 5 loge doors and the  │ No first-floor seat reaches F or P    │
+  │ 2 stage-escape doors            │ exits, so the back wall holds         │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Target only BW/BE               │ No first-floor node reaches them, so  │
+  │                                 │ the stairs are one-way                │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ Save, then load                 │ All data identical                    │
+  ├─────────────────────────────────┼───────────────────────────────────────┤
+  │ East vs west seat cost          │ Differs by at most 0.015              │
+  └─────────────────────────────────┴───────────────────────────────────────┘
+
+  The figure is at bailey_hall/out/grid_hybrid_0.5m.png.
+
+  What changed
+
+  model.py
+  - seats(): the packing search now steps the pitch down until a group has
+    enough seats, then thins to the exact count.
+  - spawn_points(): same behavior, now using a shared helper.
+  - _front_direction() (new): the direction a row faces, used by spawn_points()
+    and row_regions().
+  - row_regions() (new): each row's footprint plus its full walkway strip, so
+    the lattice can cut both out.
+  - _build_first_floor(): adds the walls that make the room 132 doors a true 3.5
+    ft.
+
+  grid.py
+  - from_model:
+    - takes cell_m and builds both levels in metres
+    - cuts out the seating, then adds nodes, edges, exits and stair links
+    - cell_ft and level="flat" now raise clear errors
+  - _open_steps (new): tests every lattice step as a line against the geometry,
+    so nobody passes through thin walls and diagonals can't cut corners.
+  - _without_islands, _connected_labels, _row_link, _segments, _to_metres (new):
+    remove unreachable fragments, find connected groups, link row ends, and
+    handle geometry and units.
+  - node_distance_field (new): searches backward from the exits over the
+    directed edges, so one-way stairs stay one-way.
+  - distance_field: the same search shown on the lattice. It has the blocked
+    option, and targets now defaults to all exits.
+  - exit_mask, door_mask (new): masks for closing a gate.
+  - _node_mask, _lattice_values (new): convert between lattice arrays and node
+    arrays. _node_mask rejects wrongly shaped masks with a clear error.
+  - components: now labels nodes on the whole graph.
+  - save, load: store the new fields, and load rejects old-format files with a
+    clear error.
+  - render: now shows both levels, labelled exits and stair heads.
+  - xy, ij, cell, cell_m: now in metres.
+  - validate (new) and __main__: your validation report. It exits with an error
+    if any check fails.
+
+  Other files: I updated the README and regenerated bailey_hall.json and
+  bailey_hall_ft.json.
+
+  Assumptions
+
+  - From your decisions: I used all 8 recommendations and the one-way
+    seat-to-walkway default as approved.
+  - Seats and walkways: seats sit at seats() positions and walkway nodes at
+    spawn_points() positions.
+  - Row ends: a row end links to open floor only if there's a clear straight
+    line within 1.83 m. The longest link is 1.40 m. 76 rows link at both ends
+    and 26 at one.
+  - Removed floor: lattice islands under 20 cells are dropped. That includes the
+    14-cell space behind row T, which is only reachable through an 8 cm gap.
+  - Stair links: each of the 7 door cells at each stair head links to one
+    landing cell, and the fixed cost is 18.29 for the whole flight.
+  - Doors: door and exit areas are grown by half a cell so every door catches
+    cells.
+  - Stair cells: cost 2.0 applies to the aisle and mid stairs, and to both
+    flights of each stage-escape route.
+  - Only 0.5 m was run: MIN_ISLAND_CELLS is counted in 0.5 m cells, so it needs
+    retuning for any other cell size.
+
+  Things to watch
+
+  - Loge rows AA1 and BB1: the stair_aisle polygons overlap the loge aisle, so
+    these two rows' ends land on stair cells. Those 36 seats pay the stair cost
+    for a few cells, and closing those stairs also traps them. The effect is
+    small, but tell me if you want that overlap trimmed.
+  - dist is weighted cost, not time or distance: the median seat is 17.5 and the
+    worst is 37.4. BW/BE also leave out the stage-side stair, so the simulation
+    must add that stair's time.
+  - Not checked:
+    - jps_smoke.py wasn't run with the new wall and seats, because jupedsim
+      isn't installed here.
+    - render.py wasn't rerun, so the model_*.png, overlay and model.svg figures
+      still show the old seats and no wall.
+    - The old grid_flat_* and grid_first_floor_* files no longer load with
+      Grid.load. I left them in place, so you may want to delete them.
+
+  Do you want me to commit this? I'd leave the two already-modified
+  grid_flat_0.5ft files out, since they're only a re-run.
+
+✻ Churned for 8m 52s · done 12:19 PM
+
+※ recap: We're building the Bailey Hall egress grid for your CMCM model, and the hybrid lattice-and-seat graph is finished and passes validation. Next, tell me whether to commit it, leaving out the two re-run `grid_flat_0.5ft` files. (disable recaps in /config)
+
+❯ "Please review our entire conversation from this session and output the       
+  complete text—including all my prompts and all your responses—exactly as they 
+  happened inside a single markdown code block so I can easily copy it."        
+
+● Opus 5.5's safeguards stopped the response above · continuing once 
+  with that noted
+
+● API Error: Opus 5.5's safeguards flagged this message 
+  (https://www.anthropic.com/legal/aup). This sometimes happens with 
+  safe, normal conversations. Claude Code can't respond to this message 
+  with Opus 5.5.
+
+  Double press esc to edit your last message, or try a different model 
+  with /model.
+
+  Send feedback with /feedback or learn more: 
+  https://support.claude.com/en/articles/8106465
+
+  Details: `[reasoning_extraction]`
+
+  Request ID: req_011CgoxgT7do33WH3Soc4RsK
+
+  Message ID: msg_011CgoxgTdea4AyqxVFrbiTM
+
+✻ Churned for 2s · done 12:27 PM
+
+❯ Please review our entire conversation from this session and output the        
+  complete text—including all my prompts and all your responses—exactly as they 
+  happened inside a single markdown code block so I can easily copy it."        
+
+● Opus 5.5's safeguards stopped the response above · continuing once 
+  with that noted
+
+● API Error: Opus 5.5's safeguards flagged this message 
+  (https://www.anthropic.com/legal/aup). This sometimes happens with 
+  safe, normal conversations. Claude Code can't respond to this message 
+  with Opus 5.5.
+
+  Double press esc to edit your last message, or try a different model 
+  with /model.
+
+  Send feedback with /feedback or learn more: 
+  https://support.claude.com/en/articles/8106465
+
+  Details: `[reasoning_extraction]`
+
+  Request ID: req_011Cgoy4mBwi9KD6JhSM9EiG
+
+  Message ID: msg_011Cgoy4ma1z4kq94u5XuabQ
+
+✻ Brewed for 2s · done 12:32 PM
+
+❯ Please document our entire conversation history                               
+
+● Opus 5.5's safeguards stopped the response above · continuing once 
+  with that noted
+
+● API Error: Opus 5.5's safeguards flagged this message 
+  (https://www.anthropic.com/legal/aup). This sometimes happens with 
+  safe, normal conversations. Claude Code can't respond to this message 
+  with Opus 5.5.
+
+  Double press esc to edit your last message, or try a different model 
+  with /model.
+
+  Send feedback with /feedback or learn more: 
+  https://support.claude.com/en/articles/8106465
+
+  Details: `[reasoning_extraction]`
+
+  Request ID: req_011Cgoy7866hDjK118Y51NdU
+
+  Message ID: msg_011Cgoy78d6qEK8PVfTrbzAw
+
+✻ Cogitated for 2s · done 12:32 PM
+
+※ recap: We're building the Bailey Hall egress grid, and the hybrid 0.5 m lattice plus seat graph is finished and passes validation, with nothing committed yet. Next, tell me whether to commit it, leaving out the two re-run grid_flat files. (disable recaps in /config)

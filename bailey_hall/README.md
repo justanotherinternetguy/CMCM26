@@ -6,6 +6,7 @@ chair layouts in `CMCM_2026_Bail(ey)ing_Out.pdf`, ready for pedestrian / egress 
 ```
 bailey_hall/
   model.py            geometry: Params (feet) -> shapely polygons, doors, seats, stairs, exports
+  grid.py             hybrid grid for a simulation: 0.5 m lattice plus seat and walkway graph (metres)
   render.py           overlays on the PDF plans (sanity check) and clean figures / SVG
   jps_smoke.py        JuPedSim run: 1,329 agents, nearest exit, until the hall is empty
   bailey_hall.json    full export in METRES (walkable areas, spaces, obstacles, doors, seats,
@@ -20,6 +21,7 @@ Set-up (already done in `.venv`): `uv venv --python 3.12 .venv && uv pip install
 ```
 .venv/bin/python bailey_hall/model.py            # areas, door count, seat counts
 .venv/bin/python bailey_hall/render.py all       # out/overlay_*.png, model_*.png, model.svg
+.venv/bin/python bailey_hall/grid.py             # build, validate, out/grid_hybrid_0.5m.npz + .png
 .venv/bin/python bailey_hall/jps_smoke.py 300    # quick JuPedSim run with 300 people
 .venv/bin/python bailey_hall/jps_smoke.py        # full house (slow, ~1 h, see below)
 ```
@@ -81,9 +83,11 @@ Balcony
   stage-side stairs 20004/20003 at the north end of the rear aisles (3.5 ft, land in room 132/10060).
 
 Seats: rows are obstacles of depth `seat_depth` = 1.5 ft leaving 1.33 ft (orchestra) / 1.5 ft
-(loge) clear between rows. `Model.seats()` samples seats at 20" along each row and thins/packs
-them to the official capacities 527 / 486 / 316 (the chair layouts contain gaps for columns,
-'MB' chairs and wheelchairs that are not drawn). `Model.spawn_points()` moves each seat into the
+(loge) clear between rows. `Model.seats()` samples seats at 20" along each row, packs a short
+group by stepping the pitch down (19.0" orchestra, 19.4" loge), then thins evenly to exactly the
+official capacities 527 / 486 / 316 (the chair layouts contain gaps for columns, 'MB' chairs and
+wheelchairs that are not drawn). The balcony stays at 20" and is thinned from 399, so 75 of its
+seat gaps are about 1 m rather than 0.5 m. `Model.spawn_points()` moves each seat into the
 clear strip in front of its row - use those as agent start positions.
 
 Judgement calls are tagged `# ASSUMPTION` in `model.py` (stage-escape route, stair lengths,
@@ -95,8 +99,30 @@ door widths, portico extent). Everything is a `Params` field, so change a number
 * `Model.flattened()` -> single polygon with the balcony mirrored south of the foyer and the
   two main balcony stairs drawn as corridors (42 ft at level speed ~ 30 ft of stair at stair
   speed). The stage-side balcony stairs become direct exits (add ~30 s for the stair).
+  `grid.py` no longer uses this layout, because it keeps both levels in one coordinate frame.
 * `bailey_hall.json` has the same content as GeoJSON geometries for any other tool
   (Godot, a browser canvas, Mesa, Vadere...).
+
+## Hybrid grid (`grid.py`)
+
+`Grid.from_model(cell_m=0.5)` builds one directed graph over both levels. Everything is in metres.
+
+* Open floor (aisles, corridors, foyer, stairs, doors) is a 0.5 m lattice with eight neighbours and
+  no corner cutting. Each step is tested against the geometry, because the barrier and foyer wall
+  are thinner than a cell.
+* Seat rows are cut out of the lattice. Each of the 1,329 seats is a node at its real position, with
+  one walkway node in front of it. Orchestra row A keeps its strip on the lattice as the front
+  cross aisle.
+* Entry costs: floor, door, exit and walkway 1, stairs 2, seats 2.5. Edge cost is true length times
+  the entry cost of the destination. Seats step out to the walkway one-way, and seat to seat runs
+  both ways.
+* The two main balcony stairs are one-way links with a fixed cost of 18.29 (30 ft x 2.0), landing
+  in the vestibule corners. The stage-side balcony stairs are not in the graph: BW and BE end at
+  the balcony door, so add that stair's time in the simulation.
+* 11 exit labels: F1-F5 (west to east), PW and PE (two portico doors each), SW and SE (room 132),
+  BW and BE. Close a gate with `grid.distance_field(blocked=grid.exit_mask("F3"))`.
+
+`grid.dist` and `grid.node_dist` are weighted costs, not walking distances or times.
 
 Pitfalls already handled (keep them in mind when editing `Params`): rows that end a few
 centimetres short of a wall leave a hairline strip that the navigation mesh happily routes

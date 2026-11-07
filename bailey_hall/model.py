@@ -379,6 +379,11 @@ class Model:
                                         p.corridor_north_y - p.door_depth_pad, p.room132[2] + p.door_depth_pad),
                                    p.corridor_to_132_x[1] - p.corridor_to_132_x[0], "door",
                                    "ASSUMPTION: 3.5 ft door between the corridor end and room 132"))
+            # The corridor and room 132 share an edge, so without this wall the whole 9 ft corridor
+            # width stays open and the 3.5 ft door above would limit nothing.
+            O[f"corridor_{tag}_132_wall"] = rect(-sgn * p.r_ext_in, -sgn * p.r_wall_out,
+                                                 p.corridor_north_y - p.door_depth_pad,
+                                                 p.corridor_north_y + p.door_depth_pad).difference(self.doors[-1].poly)
         # the first escape stair is a stair (slower); record as obstacle-free space but tag it
         # --- corridor + vestibule -------------------------------------------------------
         corr = annulus(p.r_wall_out, p.r_ext_in, -180, 0, 0.5)
@@ -506,6 +511,8 @@ class Model:
         return [d for d in self.doors if d.level == level and d.kind in ("exit", "stair-head")]
 
     OFFICIAL_SEATS = {"orchestra": 527, "loge": 486, "balcony": 316}
+    SEAT_PITCH_STEP = 0.005   # feet
+    MIN_SEAT_PITCH = 1.25     # feet; 15" is narrower than any real chair, so stop searching there
 
     @staticmethod
     def section_group(section: str) -> str:
@@ -530,12 +537,13 @@ class Model:
             grp_seats = [s for s in out if self.section_group(s["section"]) == grp]
             n, target = len(grp_seats), self.OFFICIAL_SEATS[grp]
             if 0 < n < target:   # a few seats short (e.g. 'MB' chairs on movable bases): pack the rows a little tighter
-                for _ in range(4):
-                    pitch2 = pitch * n / target * 0.995
-                    grp_seats = [s for s in self._seats_raw(level, pitch2) if self.section_group(s["section"]) == grp]
+                # Seat counts jump in whole seats per row, so a proportional pitch estimate can
+                # stall below the target; stepping down guarantees the first pitch that fits.
+                packed_pitch = pitch
+                while n < target and packed_pitch > self.MIN_SEAT_PITCH:
+                    packed_pitch -= self.SEAT_PITCH_STEP
+                    grp_seats = [s for s in self._seats_raw(level, packed_pitch) if self.section_group(s["section"]) == grp]
                     n = len(grp_seats)
-                    if n >= target:
-                        break
             if n <= target:
                 res += grp_seats
                 continue
@@ -568,20 +576,40 @@ class Model:
         p = self.p
         out = []
         for s in self.seats(level, trim=trim):
-            kind, ref = s["_facing"]
-            if kind == "vec":
-                ux, uy = ref
-            else:
-                cx, cy = ref
-                dx, dy = cx - s["x"], cy - s["y"]
-                d = math.hypot(dx, dy) or 1.0
-                ux, uy = dx / d, dy / d
+            ux, uy = self._front_direction(s["_facing"], s["x"], s["y"])
             off = p.seat_depth / 2 + s["_clear"] / 2   # centre of the clear strip in front of the row
             q = dict(s); q["x"] = s["x"] + ux * off; q["y"] = s["y"] + uy * off
             q["clear"] = s["_clear"]
             q.pop("_facing", None); q.pop("_clear", None)
             out.append(q)
         return out
+
+    @staticmethod
+    def _front_direction(facing, x: float, y: float) -> Tuple[float, float]:
+        """Unit vector from a point on a row towards the front of that row."""
+        kind, reference = facing
+        if kind == "vec":
+            return reference
+        delta_x, delta_y = reference[0] - x, reference[1] - y
+        distance = math.hypot(delta_x, delta_y) or 1.0
+        return delta_x / distance, delta_y / distance
+
+    def row_regions(self, level: str) -> List[dict]:
+        """Footprint of each seat row for a lattice: the row polygon and its walkway strip.
+
+        The strip is swept along the whole row, not just between its first and last spawn
+        point, because stopping at those points would leave orphan lattice cells at row ends."""
+        p = self.p
+        regions = []
+        for row in self.rows[level]:
+            offset_points = []
+            for x, y in row["line"].coords:
+                front_x, front_y = self._front_direction(row["facing"], x, y)
+                offset = p.seat_depth / 2 + row["clear"] / 2
+                offset_points.append((x + front_x * offset, y + front_y * offset))
+            strip = LineString(offset_points).buffer(row["clear"] / 2, cap_style="flat")
+            regions.append(dict(section=row["section"], row=row["row"], poly=row["poly"], strip=strip))
+        return regions
 
     def seat_counts(self) -> Dict[str, int]:
         c: Dict[str, int] = {}
