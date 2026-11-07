@@ -274,7 +274,7 @@ def reevaluate_targets(agents, door_costs, exit_costs, reconsidered_exit_rows, r
             choice = pick_by_distance(door_costs[:, node], random_generator)
             if choice is not None:
                 agents.target_door_row[agent_id] = choice
-                if door_costs[choice, node] == 0.0:          # already standing in that door
+                if door_costs[choice, node] == 0.0:          # already standing in door
                     agents.heading_to_door[agent_id] = False
         else:
             choice = pick_by_distance(exit_costs[reconsidered_exit_rows, node], random_generator)
