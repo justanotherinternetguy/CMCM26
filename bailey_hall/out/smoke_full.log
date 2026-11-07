@@ -1,0 +1,4 @@
+geometry: 966 m2, 13 exits: ['exit_W_room132', 'exit_E_room132', 'portico_door_40', 'portico_door_55', 'portico_door_125', 'portico_door_141', 'front_door_-20', 'front_door_-10', 'front_door_+0', 'front_door_+10', 'front_door_+20', 'balcony_exit_NW', 'balcony_exit_NE']
+agents: 1309
+routing + spawning took 2.3s; planned exit usage: {'exit_W_room132': 136, 'exit_E_room132': 137, 'portico_door_40': 73, 'portico_door_55': 286, 'portico_door_125': 287, 'portico_door_141': 74, 'front_door_-20': 65, 'front_door_-10': 0, 'front_door_+0': 0, 'front_door_+10': 0, 'front_door_+20': 65, 'balcony_exit_NW': 94, 'balcony_exit_NE': 92}
+  t=   20s  remaining 1137/1309  (wall 144s)
