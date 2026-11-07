@@ -621,7 +621,7 @@ class Model:
 
     # --------------------------------------------------------------- flattened -------
     def flattened(self, balcony_shift_y: float = -148.0) -> dict:
-        """Single-plane layout for simulators without levels (e.g. JuPedSim).
+        """Single-plane layout for simulators without levels.
 
         The balcony is mirrored in y and placed south of the foyer so that its two main
         stairs (20001/20002) can be drawn as corridors from the balcony doors down to the

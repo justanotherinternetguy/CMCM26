@@ -8,7 +8,7 @@ bailey_hall/
   model.py            geometry: Params (feet) -> shapely polygons, doors, seats, stairs, exports
   grid.py             hybrid grid for a simulation: 0.5 m lattice plus seat and walkway graph (metres)
   render.py           overlays on the PDF plans (sanity check) and clean figures / SVG
-  jps_smoke.py        JuPedSim run: 1,329 agents, nearest exit, until the hall is empty
+  Simulation.py       agent-based egress simulation on the hybrid grid
   bailey_hall.json    full export in METRES (walkable areas, spaces, obstacles, doors, seats,
                       spawn points, stairs, outdoor zones) - GeoJSON geometry objects
   bailey_hall_ft.json same in feet
@@ -16,14 +16,13 @@ bailey_hall/
   out/                rendered figures (overlay_*.png = model on top of the plan)
 ```
 
-Set-up (already done in `.venv`): `uv venv --python 3.12 .venv && uv pip install shapely jupedsim matplotlib scipy numpy pillow pymupdf`
+Set-up (already done in `.venv`): `uv venv --python 3.12 .venv && uv pip install shapely matplotlib scipy numpy pillow pymupdf`
 
 ```
 .venv/bin/python bailey_hall/model.py            # areas, door count, seat counts
 .venv/bin/python bailey_hall/render.py all       # out/overlay_*.png, model_*.png, model.svg
 .venv/bin/python bailey_hall/grid.py             # build, validate, out/grid_hybrid_0.5m.npz + .png
-.venv/bin/python bailey_hall/jps_smoke.py 300    # quick JuPedSim run with 300 people
-.venv/bin/python bailey_hall/jps_smoke.py        # full house (slow, ~1 h, see below)
+.venv/bin/python bailey_hall/Simulation.py      # run the egress simulation (full house)
 ```
 
 ## Coordinates and units
@@ -125,12 +124,5 @@ door widths, portico extent). Everything is a `Params` field, so change a number
 `grid.dist` and `grid.node_dist` are weighted costs, not walking distances or times.
 
 Pitfalls already handled (keep them in mind when editing `Params`): rows that end a few
-centimetres short of a wall leave a hairline strip that the navigation mesh happily routes
-through and agents then jam in it; spaces must overlap doors by `door_depth_pad`; spawn points
-need > agent radius clearance (`jps_smoke.py` filters them).
-
-`jps_smoke.py` is a working JuPedSim (v1.4) example: collision-free speed model, agent radius
-0.15 m, desired speed 1.2 m/s, every agent walks to the exit with the shortest path. It is a
-geometry test, not a calibrated egress model: no pre-movement time, no crowd managers, no route
-choice behaviour. Cost is ~0.1 ms per agent per 10 ms step (the many thin row obstacles make the
-navigation mesh large), so a full house runs at roughly 1/15 of real time.
+centimetres short of a wall leave a hairline strip that a router can send people through;
+spaces must overlap doors by `door_depth_pad`.

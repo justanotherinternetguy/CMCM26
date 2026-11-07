@@ -6,6 +6,7 @@ from typing import List, Sequence, Tuple
 import numpy as np
 from scipy.spatial import cKDTree
 
+from animate import RUN_PATH, save_run
 from grid import COST_STAIRS, Grid
 from model import FT, Model
 
@@ -96,7 +97,7 @@ class Agents:
     target_door_name: np.ndarray        # door out of the auditorium
     target_exit_label: np.ndarray       # exit out of Bailey Hall
     knows_exit_is_blocked: np.ndarray
-    has_exited: np.ndarray
+    has_exited: np.ndarray # False until agent gets out onto the street
     exit_step: np.ndarray
 
     target_door_row: np.ndarray         # row in door_costs
@@ -296,11 +297,17 @@ if __name__ == "__main__":
     #     print(f"{title}:", dict(zip(names.tolist(), counts.tolist())))
     tables = build_movement_tables(grid)
     reconsidered_exit_rows = np.array([fields_gate_open.exit_labels.index(label) for label in MAIN_ENTRANCE_LABELS])
+    frames = []     # one snapshot per step, for animate.py
     for step_number in range(1, 5001):
         reevaluate_targets(agents, door_costs, fields_gate_open.cost_by_exit, reconsidered_exit_rows,
                            random_generator, step_number)
         move_agents_one_step(grid, agents, occupant_at_node, door_costs, fields_gate_open.cost_by_exit,
                              tables, random_generator, step_number)
+        frames.append(dict(
+            node=agents.current_node.copy(),
+            exited=agents.has_exited.copy(),
+            to_door=agents.heading_to_door.copy()
+        ))
         if agents.has_exited.all():
             break
     for label in (MAIN_ENTRANCE_LABELS):
@@ -314,3 +321,4 @@ if __name__ == "__main__":
     time_step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
     print(f"{int(agents.has_exited.sum())} of {agents.num_agents} out, last exit at step "
           f"{int(agents.exit_step.max())} ({agents.exit_step.max() * time_step_seconds:.0f} s)")
+    print("frames saved to", save_run(RUN_PATH, grid, frames, time_step_seconds))
