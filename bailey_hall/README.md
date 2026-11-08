@@ -122,3 +122,36 @@ door widths, portico extent). Everything is a `Params` field, so change a number
   BW and BE. Close a gate with `grid.distance_field(blocked=grid.exit_mask("F3"))`.
 
 `grid.dist` and `grid.node_dist` are weighted costs, not walking distances or times.
+
+## Optimizing managers and LEDs (`optimize.py`)
+
+`LED_Simulation.py` now has `build_scenario()` (grid, barriers, cost fields: build once) and
+`run_simulation(scenario, seed, profile, manager_posts, led)` (one evacuation, returns a `RunResult`
+with t100/t95/t90 and exit counts). Running the file directly still does the same single run as before.
+
+`optimize.py` searches over a fixed list of candidates:
+
+* **Manager candidates**: 21 spots (`MANAGER_SPOTS`) × the 3 cheapest exits from each spot.
+* **LED strip candidates**: 16 start spots (`LED_START_SPOTS`) × 3 exits. A strip runs along
+  aisles/corridors from its spot to its exit; cells within 1 m of that line are lit, and LED
+  followers there are pulled toward *that strip's* exit (painted LEDs still point to the nearest exit).
+
+The search is greedy: add the candidate that lowers the mean evacuation time most, then repeat. Every
+setup is run with the same seeds. Each step screens candidates with 8 seeds and confirms the best 3
+with 24 seeds. After step 1, only the 20 best single candidates stay in the pool.
+
+```bash
+python optimize.py candidates                                  # list + draw out/opt/candidates.png
+python optimize.py managers --max-items 10                     # how many managers, and where
+python optimize.py managers --start current --max-items 3      # what to add to today's 6 posts
+python optimize.py leds --managers out/opt/managers_<t>/result.json --max-items 8 --swap-passes 1
+python optimize.py evaluate --config out/opt/leds_<t>/result.json --seeds 60
+python optimize.py evaluate --config ... --profile students --closed-exit PW   # robustness checks
+```
+
+Each search writes `out/opt/<mode>_<time>/` with `result.json` (reusable by `--config`, `--managers`,
+`--leds`, `--start`), `steps.csv`, `curve.png` (time vs count/metres) and `layout.png`.
+
+Cost: one run takes about 6 s alone, or about 2.3 s per run on average with 16 workers on this
+laptop. A 10-step manager search is about an hour. Use `--screen-seeds 4 --shortlist 12` for a quick
+look. `--cost-per-item` / `--cost-per-metre` add a time penalty per manager or per metre of LED.

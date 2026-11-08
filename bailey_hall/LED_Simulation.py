@@ -214,6 +214,17 @@ class LedGuidance:
     lit_nodes: np.ndarray             # True for every node touched by a painted LED
     cost_to_nearest_exit: np.ndarray  # what the strips point down: cost to the closest exit from each node
     visibility: np.ndarray
+    # Optional: the exit the nearest strip points to from each node (row in exit_costs), -1 = nearest exit.
+    target_exit_row_at_node: Optional[np.ndarray] = None
+    exit_costs: Optional[np.ndarray] = None
+
+    def cost_field_at(self, node: int) -> np.ndarray:
+        """The cost field the LED strip seen from `node` points down."""
+        if self.target_exit_row_at_node is not None:
+            row = self.target_exit_row_at_node[node]
+            if row >= 0:
+                return self.exit_costs[row]
+        return self.cost_to_nearest_exit
 
 
 def painted_value_at(painted: np.ndarray, level_index: np.ndarray, row: np.ndarray, col: np.ndarray) -> np.ndarray:
@@ -245,20 +256,39 @@ def node_is_lit(paint: GridPaint, grid: Grid) -> np.ndarray:
     return lit
 
 
-def build_led_guidance(grid: Grid, paint: GridPaint, fields: DistanceFields) -> LedGuidance:
+def build_led_guidance(grid: Grid, paint: Optional[GridPaint], fields: DistanceFields,
+                       enabled: bool = LED_ENABLED, strength: float = LED_STRENGTH,
+                       lit_nodes: Optional[np.ndarray] = None,
+                       target_exit_row_at_node: Optional[np.ndarray] = None) -> LedGuidance:
+    """LEDs from the painted layout, or from `lit_nodes` (+ optional per-node target exit) if given.
+    A node off the strips follows the target of the nearest lit node."""
+    led_exit_costs = fields.true_cost_by_exit if LED_KNOWS_CLOSURES else fields.cost_by_exit
     led_cost = fields.true_best_cost if LED_KNOWS_CLOSURES else fields.best_cost
-    if not LED_ENABLED:
-        return LedGuidance(False, LED_STRENGTH, np.zeros(grid.num_nodes, bool), led_cost,
+    if not enabled:
+        return LedGuidance(False, strength, np.zeros(grid.num_nodes, bool), led_cost,
                            np.zeros(grid.num_nodes))
-    lit_nodes = node_is_lit(paint, grid) & ~fields.blocked_nodes
+    if lit_nodes is None:
+        lit_nodes = node_is_lit(paint, grid) if paint is not None else np.zeros(grid.num_nodes, bool)
+    lit_nodes = np.asarray(lit_nodes, bool) & ~fields.blocked_nodes
     blocked_or_none = fields.blocked_nodes if fields.blocked_nodes.any() else None
+
+    distance_to_lit = np.full(grid.num_nodes, np.inf)
+    target_by_nearest = None
     if lit_nodes.any():
-        distance_to_lit = grid.node_distance_field(targets=lit_nodes, blocked=blocked_or_none)
-    else:
-        distance_to_lit = np.full(grid.num_nodes, np.inf)
+        if target_exit_row_at_node is None:
+            distance_to_lit = grid.node_distance_field(targets=lit_nodes, blocked=blocked_or_none)
+        else:
+            # One search per distinct target, so nodes near a strip take that strip's exit.
+            target_by_nearest = np.full(grid.num_nodes, -1, np.int32)
+            for row in np.unique(target_exit_row_at_node[lit_nodes]):
+                group = lit_nodes & (target_exit_row_at_node == row)
+                distance = grid.node_distance_field(targets=group, blocked=blocked_or_none)
+                closer = distance < distance_to_lit
+                distance_to_lit[closer] = distance[closer]
+                target_by_nearest[closer] = row
     visibility = np.where(distance_to_lit <= LED_MAX_RANGE_M,
                           np.exp(-distance_to_lit / LED_VIEW_SCALE_M), 0.0)
-    return LedGuidance(True, LED_STRENGTH, lit_nodes, led_cost, visibility)
+    return LedGuidance(True, strength, lit_nodes, led_cost, visibility, target_by_nearest, led_exit_costs)
 
 @dataclass
 class CrowdManagers:
@@ -275,24 +305,32 @@ class CrowdManagers:
         return len(self.node)
 
 
-def place_crowd_managers(grid: Grid, fields: DistanceFields,
-                         posts: Sequence[CrowdManagerPost]) -> CrowdManagers:
+def place_crowd_managers(grid: Grid, fields: DistanceFields, posts: Sequence[CrowdManagerPost],
+                         cache: Optional[dict] = None) -> CrowdManagers:
+    """`cache` (any dict, kept between calls) saves the per-post distance search when the same
+    posts are placed again, which the optimizer does thousands of times."""
     names, nodes, exit_rows, distance_rows = [], [], [], []
     blocked = fields.blocked_nodes if fields.blocked_nodes.any() else None
     for post in posts:
-        post_row = fields.exit_labels.index(post.target_exit_label)
-        candidates = np.flatnonzero((grid.node_kind == NODE_CELL) & (grid.node_level == post.level)
-                                    & ~fields.blocked_nodes & ~fields.closed_nodes
-                                    & np.isfinite(fields.cost_by_exit[post_row]))
-        node = int(candidates[np.argmin(np.hypot(grid.node_x[candidates] - post.x_m,
-                                                 grid.node_y[candidates] - post.y_m))])
-        exit_row = post_row
-        if fields.is_closed[post_row] or not np.isfinite(fields.true_cost_by_exit[post_row, node]):
-            exit_row = int(np.argmin(fields.true_cost_by_exit[:, node]))   # managers know every closure
-        at_manager = np.zeros(grid.num_nodes, bool)
-        at_manager[node] = True
-        distance = grid.node_distance_field(targets=at_manager, blocked=blocked)
-        distance[distance > CROWD_MANAGER_RADIUS_M] = np.inf
+        key = (post.level, post.x_m, post.y_m, post.target_exit_label, CROWD_MANAGER_RADIUS_M)
+        if cache is not None and key in cache:
+            node, exit_row, distance = cache[key]
+        else:
+            post_row = fields.exit_labels.index(post.target_exit_label)
+            candidates = np.flatnonzero((grid.node_kind == NODE_CELL) & (grid.node_level == post.level)
+                                        & ~fields.blocked_nodes & ~fields.closed_nodes
+                                        & np.isfinite(fields.cost_by_exit[post_row]))
+            node = int(candidates[np.argmin(np.hypot(grid.node_x[candidates] - post.x_m,
+                                                     grid.node_y[candidates] - post.y_m))])
+            exit_row = post_row
+            if fields.is_closed[post_row] or not np.isfinite(fields.true_cost_by_exit[post_row, node]):
+                exit_row = int(np.argmin(fields.true_cost_by_exit[:, node]))   # managers know every closure
+            at_manager = np.zeros(grid.num_nodes, bool)
+            at_manager[node] = True
+            distance = grid.node_distance_field(targets=at_manager, blocked=blocked)
+            distance[distance > CROWD_MANAGER_RADIUS_M] = np.inf
+            if cache is not None:
+                cache[key] = (node, exit_row, distance)
         names.append(post.name)
         nodes.append(node)
         exit_rows.append(exit_row)
@@ -569,8 +607,9 @@ def choose_next_edge(grid: Grid, agent_id: int, agents: Agents, occupant_at_node
 
     led_pull = np.zeros(len(outgoing_edges))
     led_weight = led.visibility[current_node] * compute_led_trust(agents, agent_id)
-    if led_weight > 0.0 and np.isfinite(led.cost_to_nearest_exit[current_node]):
-        led_distance_gained = led.cost_to_nearest_exit[current_node] - led.cost_to_nearest_exit[neighbor_nodes]
+    led_cost = led.cost_field_at(current_node)
+    if led_weight > 0.0 and np.isfinite(led_cost[current_node]):
+        led_distance_gained = led_cost[current_node] - led_cost[neighbor_nodes]
         led_pull = (led_weight * led.strength
                     * np.where(np.isfinite(led_distance_gained), led_distance_gained, 0.0))
 
@@ -648,8 +687,10 @@ def move_agents_one_step(grid: Grid, agents: Agents, occupant_at_node: np.ndarra
                                        >= LED_RELAX_WEIGHT)
         if agents.heading_to_door[agent_id] and reached_door:
             agents.heading_to_door[agent_id] = False
-        # Checked right away because some doors (balcony north) are also exits.
-        if not agents.heading_to_door[agent_id]:
+        # Checked right away because some doors (balcony north) are also exits.  LED-guided people can be
+        # led straight to an exit that is not behind any auditorium door (stage-side SW/SE), so they are
+        # out as soon as they stand in any exit.
+        if not agents.heading_to_door[agent_id] or agents.led_guided[agent_id]:
             finish_if_at_exit(agents, agent_id, next_node, exit_costs, exit_goal_cost, occupant_at_node, step_number)
 
 
@@ -784,103 +825,200 @@ def time_to_fraction_out(agents: Agents, fraction: float, step_seconds: float) -
     return step, step * step_seconds
 
 
-if __name__ == "__main__":
-    grid = Grid.from_model(cell_m=CELL_M)
-    paint = GridPaint.load(PAINT_PATH, grid)
-    barrier_nodes = paint.node_is_barrier(grid) if BARRIERS_ENABLED else np.zeros(grid.num_nodes, bool)
+@dataclass
+class Scenario:
+    """Everything that does not change between runs: grid, painted barriers, cost fields.
+    Build it once with build_scenario() and pass it to run_simulation() as often as you like."""
+    grid: Grid
+    paint: Optional[GridPaint]
+    fields: DistanceFields
+    door_costs: np.ndarray
+    door_to_exit_costs: np.ndarray
+    exit_goal_cost: np.ndarray
+    tables: MovementTables
+    all_exit_rows: np.ndarray
+    uninformed_exit_rows: np.ndarray     # main entrances plus the side exits
+    discovery_distance: np.ndarray       # (num_exits, num_nodes) distance to a closed exit within view, else inf
+    door_blocked_by_exit: np.ndarray     # (num_doors, num_exits) door shares nodes with that exit
+    seat_neighbors: np.ndarray
+    manager_cache: dict
 
-    fields = compute_distance_fields(grid, barrier_nodes, CLOSED_EXIT_LABELS)
-    print(fields.exit_labels, "closed:", fields.closed_exit_labels)
-    exit_costs = fields.cost_by_exit
+    @property
+    def exit_costs(self) -> np.ndarray:
+        """Believed costs: closed exits look open until someone sees them."""
+        return self.fields.cost_by_exit
+
+
+def build_scenario(cell_m: float = CELL_M, paint_path: Optional[str] = PAINT_PATH,
+                   barriers_enabled: bool = BARRIERS_ENABLED,
+                   closed_exit_labels: Sequence[str] = CLOSED_EXIT_LABELS) -> Scenario:
+    grid = Grid.from_model(cell_m=cell_m)
+    paint = GridPaint.load(paint_path, grid) if paint_path else None
+    if barriers_enabled and paint is not None:
+        barrier_nodes = paint.node_is_barrier(grid)
+    else:
+        barrier_nodes = np.zeros(grid.num_nodes, bool)
+
+    fields = compute_distance_fields(grid, barrier_nodes, closed_exit_labels)
     door_costs = compute_door_costs(grid, fields.blocked_nodes)
-    door_to_exit_costs = compute_door_to_exit_costs(door_costs, exit_costs)
-    exit_goal_cost = compute_exit_goal_costs(exit_costs)
+    door_to_exit_costs = compute_door_to_exit_costs(door_costs, fields.cost_by_exit)
+    exit_goal_cost = compute_exit_goal_costs(fields.cost_by_exit)
 
-    led = build_led_guidance(grid, paint, fields)
+    main_entrance_rows = np.array([fields.exit_labels.index(label) for label in MAIN_ENTRANCE_LABELS], dtype=int)
+    side_exit_rows = np.array([fields.exit_labels.index(label) for label in SIDE_EXIT_LABELS], dtype=int)
 
-    random_generator = np.random.default_rng(RANDOM_SEED)
-    agents, occupant_at_node = spawn_agents(grid, PROFILE, random_generator, fields,
-                                            door_costs, door_to_exit_costs, led)
-    occupant_at_node[fields.closed_nodes] = -2
-
-    # A separate stream preserves the existing movement and target-choice RNG.
-    response_rng = np.random.default_rng(np.random.SeedSequence([RANDOM_SEED, 1]))
-    if RESPONSE_TIME_ENABLED:
-        agents.response_time = assign_response_times(grid, response_rng)
-    initially_assigned = agents.response_time.copy()
-    seat_neighbors = immediate_seat_neighbors(grid)
-    print(f"Original response times: mean={initially_assigned.mean():.1f} s, "
-          f"median={np.median(initially_assigned):.1f} s, maximum={initially_assigned.max():.1f} s")
-
-    print(f"profile: {PROFILE.name} (mean independence {agents.independence.mean():.2f})")
-    for title, values in (("initial target doors", agents.target_door_name),
-                          ("initial target exits", agents.target_exit_label)):
-        names, counts = np.unique(values, return_counts=True)
-        print(f"{title}:", dict(zip(names.tolist(), counts.tolist())))
-    print("start without a door stage:", int((~agents.heading_to_door).sum()))
-
-    managers = place_crowd_managers(grid, fields, CROWD_MANAGER_POSTS) if PROFILE.has_crowd_managers else None
-    if managers is not None:
-        required = int(np.ceil(agents.num_agents / ATTENDEES_PER_CROWD_MANAGER))
-        print(f"crowd managers: {managers.num_managers} (law requires at least {required})")
-        for name, node, label in zip(managers.names, managers.node, managers.target_exit_label):
-            print(f"  {name:20s} at ({grid.node_x[node]:6.1f}, {grid.node_y[node]:6.1f}) m -> {label}")
-    manager_random_generator = np.random.default_rng(np.random.SeedSequence([RANDOM_SEED, 2]))
-    num_redirected = 0
-
-    tables = build_movement_tables(grid)
-    all_exit_rows = np.arange(len(fields.exit_labels))
-    main_entrance_rows = np.array([fields.exit_labels.index(label) for label in MAIN_ENTRANCE_LABELS])
-    side_exit_rows = np.array([fields.exit_labels.index(label) for label in SIDE_EXIT_LABELS
-                            if label in fields.exit_labels], dtype=int)      # skips closed exits
-    uninformed_exit_rows = np.concatenate([main_entrance_rows, side_exit_rows])
-
-    discovery_distance = compute_discovery_distance(grid, fields, barrier_nodes)
     exit_node_masks = [mask_to_node_mask(grid, grid.exit_mask(label)) for label in fields.exit_labels]
     door_node_masks = [mask_to_node_mask(grid, grid.door_mask(door)) for door in KNOWN_AUDITORIUM_DOOR_NAMES]
     door_blocked_by_exit = np.array([[bool((door_nodes & exit_nodes).any()) for exit_nodes in exit_node_masks]
                                      for door_nodes in door_node_masks])
-    num_discoveries = 0
+
+    return Scenario(grid, paint, fields, door_costs, door_to_exit_costs, exit_goal_cost,
+                    build_movement_tables(grid), np.arange(len(fields.exit_labels)),
+                    np.concatenate([main_entrance_rows, side_exit_rows]),
+                    compute_discovery_distance(grid, fields, barrier_nodes), door_blocked_by_exit,
+                    immediate_seat_neighbors(grid), {})
+
+
+@dataclass
+class RunResult:
+    seed: int
+    num_agents: int
+    num_out: int
+    evacuation_time_s: float             # last person out (inf if someone never got out)
+    time_90_s: float
+    time_95_s: float
+    exit_counts: dict
+    num_told_by_manager: int
+    num_exit_changes_by_manager: int
+    num_led_guided: int                  # people guided by the LEDs at some point
+    num_noticed_closed_exit: int
+    exit_times_s: np.ndarray             # per agent, inf if not out
+    frames: Optional[List[dict]] = None
+    manager_nodes: Optional[np.ndarray] = None
+
+    def summary(self) -> dict:
+        return dict(seed=self.seed, t100=self.evacuation_time_s, t95=self.time_95_s, t90=self.time_90_s,
+                    num_out=self.num_out, num_agents=self.num_agents, exit_counts=self.exit_counts,
+                    told_by_manager=self.num_told_by_manager)
+
+
+def run_simulation(scenario: Scenario, seed: int = RANDOM_SEED, profile: AudienceProfile = PROFILE,
+                   manager_posts: Optional[Sequence[CrowdManagerPost]] = CROWD_MANAGER_POSTS,
+                   led: Optional[LedGuidance] = None, record_frames: bool = False,
+                   max_steps: int = MAX_STEPS, verbose: bool = False) -> RunResult:
+    """One evacuation.  `led=None` uses the painted LEDs; `manager_posts=None` or () means no managers
+    (managers are also off when the profile has none)."""
+    grid, fields = scenario.grid, scenario.fields
+    exit_costs, door_costs = fields.cost_by_exit, scenario.door_costs
+    if led is None:
+        led = build_led_guidance(grid, scenario.paint, fields)
+
+    random_generator = np.random.default_rng(seed)
+    agents, occupant_at_node = spawn_agents(grid, profile, random_generator, fields,
+                                            door_costs, scenario.door_to_exit_costs, led)
+    occupant_at_node[fields.closed_nodes] = -2
+
+    # A separate stream preserves the existing movement and target-choice RNG.
+    response_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
+    if RESPONSE_TIME_ENABLED:
+        agents.response_time = assign_response_times(grid, response_rng)
+    initially_assigned = agents.response_time.copy()
+
+    managers = None
+    if profile.has_crowd_managers and manager_posts:
+        managers = place_crowd_managers(grid, fields, manager_posts, cache=scenario.manager_cache)
+    manager_random_generator = np.random.default_rng(np.random.SeedSequence([seed, 2]))
+
+    if verbose:
+        print(f"blocked nodes: {int(fields.blocked_nodes.sum())}, lit nodes: {int(led.lit_nodes.sum())}")
+        print(f"Original response times: mean={initially_assigned.mean():.1f} s, "
+              f"median={np.median(initially_assigned):.1f} s, maximum={initially_assigned.max():.1f} s")
+        print(f"profile: {profile.name} (mean independence {agents.independence.mean():.2f})")
+        for title, values in (("initial target doors", agents.target_door_name),
+                              ("initial target exits", agents.target_exit_label)):
+            names, counts = np.unique(values, return_counts=True)
+            print(f"{title}:", dict(zip(names.tolist(), counts.tolist())))
+        print("start without a door stage:", int((~agents.heading_to_door).sum()))
+        if managers is not None:
+            required = int(np.ceil(agents.num_agents / ATTENDEES_PER_CROWD_MANAGER))
+            print(f"crowd managers: {managers.num_managers} (law requires at least {required})")
+            for name, node, label in zip(managers.names, managers.node, managers.target_exit_label):
+                print(f"  {name:20s} at ({grid.node_x[node]:6.1f}, {grid.node_y[node]:6.1f}) m -> {label}")
 
     time_step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
-    frames = []     # one snapshot per step, for animate.py
-    for step_number in range(1, MAX_STEPS + 1):
-        num_discoveries += discover_closed_exits(agents, discovery_distance, door_blocked_by_exit, door_costs,
-                                                 door_to_exit_costs, exit_costs, all_exit_rows,
-                                                 uninformed_exit_rows, fields.exit_labels)
-        reevaluate_targets(agents, door_costs, door_to_exit_costs, exit_costs, exit_goal_cost, all_exit_rows,
-                           uninformed_exit_rows, occupant_at_node, random_generator, step_number)
-        num_redirected += apply_crowd_managers(agents, managers, door_costs, door_to_exit_costs, exit_costs,
-                                               manager_random_generator, time_step_seconds)
-        move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs, exit_goal_cost, led,
-                             tables, random_generator, step_number, seat_neighbors)
-        frames.append(dict(
-            node=agents.current_node.copy(),
-            exited=agents.has_exited.copy(),
-            to_door=agents.heading_to_door.copy(),
-            manager=agents.follows_manager.copy(),
-        ))
+    num_redirected = 0
+    num_discoveries = 0
+    ever_led_guided = np.zeros(agents.num_agents, bool)
+    frames = [] if record_frames else None     # one snapshot per step, for animate.py
+    for step_number in range(1, max_steps + 1):
+        num_discoveries += discover_closed_exits(agents, scenario.discovery_distance, scenario.door_blocked_by_exit,
+                                                 door_costs, scenario.door_to_exit_costs, exit_costs,
+                                                 scenario.all_exit_rows, scenario.uninformed_exit_rows,
+                                                 fields.exit_labels)
+        reevaluate_targets(agents, door_costs, scenario.door_to_exit_costs, exit_costs, scenario.exit_goal_cost,
+                           scenario.all_exit_rows, scenario.uninformed_exit_rows, occupant_at_node,
+                           random_generator, step_number)
+        num_redirected += apply_crowd_managers(agents, managers, door_costs, scenario.door_to_exit_costs,
+                                               exit_costs, manager_random_generator, time_step_seconds)
+        move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs, scenario.exit_goal_cost,
+                             led, scenario.tables, random_generator, step_number, scenario.seat_neighbors)
+        ever_led_guided |= agents.led_guided
+        if record_frames:
+            frames.append(dict(
+                node=agents.current_node.copy(),
+                exited=agents.has_exited.copy(),
+                to_door=agents.heading_to_door.copy(),
+                manager=agents.follows_manager.copy(),
+            ))
         if agents.has_exited.all():
             break
-    print(f"After social response: mean={agents.response_time.mean():.1f} s, "
-          f"median={np.median(agents.response_time):.1f} s, "
-          f"maximum={agents.response_time.max():.1f} s; "
-          f"{np.count_nonzero(agents.response_time < initially_assigned)} shortened")
-    print(f"agents who noticed a closed exit: {int(agents.knows_closed.any(axis=1).sum())} of {agents.num_agents}")
 
-    if managers is not None:
-        print(f"told by a crowd manager: {int(agents.follows_manager.sum())} of {agents.num_agents} "
-              f"({num_redirected} exit changes)")
     exit_names = np.array(fields.exit_labels)[agents.target_exit_row[agents.has_exited]]
     names, counts = np.unique(exit_names, return_counts=True)
-    print("exit used:", dict(zip(names.tolist(), counts.tolist())))
-    print(f"{int(agents.has_exited.sum())} of {agents.num_agents} out, last exit at step "
-          f"{int(agents.exit_step.max())} ({agents.exit_step.max() * time_step_seconds:.0f} s)")
-    ninety_percent = time_to_fraction_out(agents, 0.9, time_step_seconds)
-    if ninety_percent is not None:
-        print(f"90% out by {ninety_percent[1]:.0f} s")
-    manager_nodes = managers.node if managers is not None else None
-    closed_exit_cells = (np.any([np.asarray(grid.exit_mask(label), bool) for label in CLOSED_EXIT_LABELS], axis=0)
-                        if CLOSED_EXIT_LABELS else None)
-    print("frames saved to", save_run(RUN_PATH, grid, frames, time_step_seconds,
-                                      manager_nodes=manager_nodes, closed_exit_cells=closed_exit_cells))
+    exit_times = np.where(agents.has_exited, agents.exit_step * time_step_seconds, np.inf)
+
+    def fraction_time(fraction: float) -> float:
+        found = time_to_fraction_out(agents, fraction, time_step_seconds)
+        return found[1] if found is not None else np.inf
+
+    result = RunResult(
+        seed=seed, num_agents=agents.num_agents, num_out=int(agents.has_exited.sum()),
+        evacuation_time_s=fraction_time(1.0), time_90_s=fraction_time(0.9), time_95_s=fraction_time(0.95),
+        exit_counts=dict(zip(names.tolist(), counts.tolist())),
+        num_told_by_manager=int(agents.follows_manager.sum()), num_exit_changes_by_manager=num_redirected,
+        num_led_guided=int(ever_led_guided.sum()),
+        num_noticed_closed_exit=int(agents.knows_closed.any(axis=1).sum()),
+        exit_times_s=exit_times, frames=frames,
+        manager_nodes=managers.node if managers is not None else None)
+
+    if verbose:
+        print(f"After social response: mean={agents.response_time.mean():.1f} s, "
+              f"median={np.median(agents.response_time):.1f} s, "
+              f"maximum={agents.response_time.max():.1f} s; "
+              f"{np.count_nonzero(agents.response_time < initially_assigned)} shortened")
+        print(f"agents who noticed a closed exit: {result.num_noticed_closed_exit} of {agents.num_agents}")
+        print(f"guided by the LEDs at some point: {result.num_led_guided} of {agents.num_agents}")
+        if managers is not None:
+            print(f"told by a crowd manager: {result.num_told_by_manager} of {agents.num_agents} "
+                  f"({num_redirected} exit changes)")
+        print("exit used:", result.exit_counts)
+        print(f"{result.num_out} of {agents.num_agents} out, last exit at step "
+              f"{int(agents.exit_step.max())} ({agents.exit_step.max() * time_step_seconds:.0f} s)")
+        if np.isfinite(result.time_90_s):
+            print(f"90% out by {result.time_90_s:.0f} s")
+    return result
+
+
+if __name__ == "__main__":
+    scenario = build_scenario()
+    fields = scenario.fields
+    print(fields.exit_labels, "closed:", fields.closed_exit_labels)
+    if scenario.paint is not None:
+        print(f"{int(scenario.paint.cell_has_led.sum())} painted LED cells")
+    result = run_simulation(scenario, seed=RANDOM_SEED, profile=PROFILE, record_frames=True, verbose=True)
+    time_step_seconds = scenario.grid.cell_m / MAX_WALKING_SPEED_M_PER_S
+    closed = list(fields.closed_exit_labels)
+    closed_exit_cells = (np.any([np.asarray(scenario.grid.exit_mask(label), bool) for label in closed], axis=0)
+                         if closed else None)
+    print("frames saved to", save_run(RUN_PATH, scenario.grid, result.frames, time_step_seconds,
+                                      manager_nodes=result.manager_nodes, closed_exit_cells=closed_exit_cells))

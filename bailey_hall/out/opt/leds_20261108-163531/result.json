@@ -1,0 +1,396 @@
+{
+ "kind": "leds",
+ "args": {
+  "mode": "leds",
+  "profile": "concert",
+  "metric": "t100",
+  "max_items": 6,
+  "swap_passes": 0,
+  "start": "none",
+  "managers": "out/opt/managers_20261108-161117/result.json",
+  "leds": "none",
+  "config": null,
+  "keep_painted_leds": false,
+  "closed_exit": null,
+  "screen_seeds": 8,
+  "confirm_seeds": 24,
+  "confirm_top": 3,
+  "shortlist": 20,
+  "seeds": null,
+  "seed0": 1000,
+  "exits_per_spot": 3,
+  "top_spots": 11,
+  "band_half_width": 1.0,
+  "cost_per_item": 0.0,
+  "cost_per_metre": 0.0,
+  "workers": 16
+ },
+ "seeds": [
+  1000,
+  1001,
+  1002,
+  1003,
+  1004,
+  1005,
+  1006,
+  1007,
+  1008,
+  1009,
+  1010,
+  1011,
+  1012,
+  1013,
+  1014,
+  1015,
+  1016,
+  1017,
+  1018,
+  1019,
+  1020,
+  1021,
+  1022,
+  1023
+ ],
+ "num_runs": 1176,
+ "final": {
+  "mean": 169.19642857142858,
+  "ci95": 9.20361509392377,
+  "score": 169.19642857142858,
+  "t100": 169.19642857142858,
+  "t95": 137.4404761904762,
+  "t90": 125.68452380952381,
+  "told_by_manager": 917.2916666666666,
+  "exit_counts": {
+   "BE": 53.0,
+   "BW": 51.8,
+   "F1": 14.7,
+   "F2": 96.6,
+   "F3": 280.8,
+   "F4": 96.6,
+   "F5": 13.9,
+   "PE": 320.8,
+   "PW": 400.8
+  },
+  "num_seeds": 24
+ },
+ "steps": [
+  {
+   "step": 0,
+   "added": "(start)",
+   "selected": [],
+   "mean": 200.0744047619048,
+   "ci95": 4.530248494186839,
+   "score": 200.0744047619048,
+   "t100": 200.0744047619048,
+   "t95": 164.89583333333334,
+   "t90": 147.5,
+   "told_by_manager": 987.1666666666666,
+   "exit_counts": {
+    "BE": 52.7,
+    "BW": 51.6,
+    "F1": 25.8,
+    "F2": 39.0,
+    "F3": 141.7,
+    "F4": 56.5,
+    "F5": 24.9,
+    "PE": 363.9,
+    "PW": 572.9
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 1,
+   "added": "centre aisle W -> F2",
+   "selected": [
+    "centre aisle W -> F2"
+   ],
+   "mean": 194.1517857142857,
+   "ci95": 2.7977204262279916,
+   "score": 194.1517857142857,
+   "t100": 194.1517857142857,
+   "t95": 150.9672619047619,
+   "t90": 134.73214285714286,
+   "told_by_manager": 957.4583333333334,
+   "exit_counts": {
+    "BE": 52.9,
+    "BW": 51.9,
+    "F1": 14.2,
+    "F2": 111.5,
+    "F3": 208.4,
+    "F4": 57.0,
+    "F5": 25.9,
+    "PE": 366.8,
+    "PW": 440.4
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 2,
+   "added": "centre aisle E -> F4",
+   "selected": [
+    "centre aisle W -> F2",
+    "centre aisle E -> F4"
+   ],
+   "mean": 171.53273809523807,
+   "ci95": 5.180465954529444,
+   "score": 171.53273809523807,
+   "t100": 171.53273809523807,
+   "t95": 138.0952380952381,
+   "t90": 126.08630952380952,
+   "told_by_manager": 917.9583333333334,
+   "exit_counts": {
+    "BE": 52.9,
+    "BW": 51.7,
+    "F1": 15.0,
+    "F2": 99.6,
+    "F3": 267.6,
+    "F4": 97.7,
+    "F5": 13.3,
+    "PE": 318.7,
+    "PW": 412.5
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 3,
+   "added": "mid cross E -> PE",
+   "selected": [
+    "centre aisle W -> F2",
+    "centre aisle E -> F4",
+    "mid cross E -> PE"
+   ],
+   "mean": 165.11904761904762,
+   "ci95": 2.2728203977407624,
+   "score": 165.11904761904762,
+   "t100": 165.11904761904762,
+   "t95": 138.08035714285714,
+   "t90": 125.89285714285715,
+   "told_by_manager": 918.0,
+   "exit_counts": {
+    "BE": 53.0,
+    "BW": 51.5,
+    "F1": 14.8,
+    "F2": 99.2,
+    "F3": 266.6,
+    "F4": 96.7,
+    "F5": 14.4,
+    "PE": 320.9,
+    "PW": 411.8
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 4,
+   "added": "mid cross W -> PW",
+   "selected": [
+    "centre aisle W -> F2",
+    "centre aisle E -> F4",
+    "mid cross E -> PE",
+    "mid cross W -> PW"
+   ],
+   "mean": 165.9375,
+   "ci95": 3.9996821091978902,
+   "score": 165.9375,
+   "t100": 165.9375,
+   "t95": 136.86011904761904,
+   "t90": 125.17857142857144,
+   "told_by_manager": 917.25,
+   "exit_counts": {
+    "BE": 53.2,
+    "BW": 51.7,
+    "F1": 14.6,
+    "F2": 101.0,
+    "F3": 266.8,
+    "F4": 95.6,
+    "F5": 13.1,
+    "PE": 319.0,
+    "PW": 414.0
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 5,
+   "added": "loge back centre -> F3",
+   "selected": [
+    "centre aisle W -> F2",
+    "centre aisle E -> F4",
+    "mid cross E -> PE",
+    "mid cross W -> PW",
+    "loge back centre -> F3"
+   ],
+   "mean": 165.625,
+   "ci95": 3.2346026008626234,
+   "score": 165.625,
+   "t100": 165.625,
+   "t95": 137.44047619047618,
+   "t90": 125.8184523809524,
+   "told_by_manager": 912.5416666666666,
+   "exit_counts": {
+    "BE": 53.0,
+    "BW": 51.8,
+    "F1": 15.7,
+    "F2": 97.8,
+    "F3": 278.6,
+    "F4": 95.2,
+    "F5": 14.1,
+    "PE": 321.5,
+    "PW": 401.3
+   },
+   "num_seeds": 24
+  },
+  {
+   "step": 6,
+   "added": "rear ring W -> PW",
+   "selected": [
+    "centre aisle W -> F2",
+    "centre aisle E -> F4",
+    "mid cross E -> PE",
+    "mid cross W -> PW",
+    "loge back centre -> F3",
+    "rear ring W -> PW"
+   ],
+   "mean": 169.19642857142858,
+   "ci95": 9.20361509392377,
+   "score": 169.19642857142858,
+   "t100": 169.19642857142858,
+   "t95": 137.4404761904762,
+   "t90": 125.68452380952381,
+   "told_by_manager": 917.2916666666666,
+   "exit_counts": {
+    "BE": 53.0,
+    "BW": 51.8,
+    "F1": 14.7,
+    "F2": 96.6,
+    "F3": 280.8,
+    "F4": 96.6,
+    "F5": 13.9,
+    "PE": 320.8,
+    "PW": 400.8
+   },
+   "num_seeds": 24
+  }
+ ],
+ "managers": [
+  {
+   "id": "side corridor W -> PW",
+   "spot": "side corridor W",
+   "level": 0,
+   "x_m": -17.0,
+   "y_m": -4.0,
+   "target_exit": "PW"
+  },
+  {
+   "id": "mid cross E -> PE",
+   "spot": "mid cross E",
+   "level": 0,
+   "x_m": 10.0,
+   "y_m": -2.0,
+   "target_exit": "PE"
+  },
+  {
+   "id": "mid cross W -> PW",
+   "spot": "mid cross W",
+   "level": 0,
+   "x_m": -10.0,
+   "y_m": -2.0,
+   "target_exit": "PW"
+  },
+  {
+   "id": "side corridor E -> PE",
+   "spot": "side corridor E",
+   "level": 0,
+   "x_m": 17.0,
+   "y_m": -4.0,
+   "target_exit": "PE"
+  },
+  {
+   "id": "balcony SE -> PW",
+   "spot": "balcony SE",
+   "level": 1,
+   "x_m": 11.0,
+   "y_m": -14.5,
+   "target_exit": "PW"
+  },
+  {
+   "id": "rear ring W -> PW",
+   "spot": "rear ring W",
+   "level": 0,
+   "x_m": -11.0,
+   "y_m": -14.5,
+   "target_exit": "PW"
+  },
+  {
+   "id": "balcony SW -> PW",
+   "spot": "balcony SW",
+   "level": 1,
+   "x_m": -11.0,
+   "y_m": -14.5,
+   "target_exit": "PW"
+  },
+  {
+   "id": "lobby -> F3",
+   "spot": "lobby",
+   "level": 0,
+   "x_m": 0.0,
+   "y_m": -21.0,
+   "target_exit": "F3"
+  }
+ ],
+ "led_strips": [
+  {
+   "id": "centre aisle W -> F2",
+   "spot": "centre aisle W",
+   "level": 0,
+   "x_m": -5.0,
+   "y_m": 0.0,
+   "target_exit": "F2",
+   "length_m": 26.656854249492376
+  },
+  {
+   "id": "centre aisle E -> F4",
+   "spot": "centre aisle E",
+   "level": 0,
+   "x_m": 5.0,
+   "y_m": 0.0,
+   "target_exit": "F4",
+   "length_m": 26.656854249492376
+  },
+  {
+   "id": "mid cross E -> PE",
+   "spot": "mid cross E",
+   "level": 0,
+   "x_m": 11.0,
+   "y_m": -2.0,
+   "target_exit": "PE",
+   "length_m": 13.535533905932738
+  },
+  {
+   "id": "mid cross W -> PW",
+   "spot": "mid cross W",
+   "level": 0,
+   "x_m": -11.0,
+   "y_m": -2.0,
+   "target_exit": "PW",
+   "length_m": 10.828427124746192
+  },
+  {
+   "id": "loge back centre -> F3",
+   "spot": "loge back centre",
+   "level": 0,
+   "x_m": 0.0,
+   "y_m": -16.5,
+   "target_exit": "F3",
+   "length_m": 8.5
+  },
+  {
+   "id": "rear ring W -> PW",
+   "spot": "rear ring W",
+   "level": 0,
+   "x_m": -12.0,
+   "y_m": -14.5,
+   "target_exit": "PW",
+   "length_m": 5.742640687119286
+  }
+ ],
+ "led_metres": 91.9
+}
