@@ -1,0 +1,42 @@
+{
+ "cell_size_m": 0.5,
+ "counts": {
+  "led_floor_cells": 3,
+  "barrier_floor_cells": 0,
+  "led_wall_segments": 0,
+  "led_wall_length_m": 0.0,
+  "led_seats": 0,
+  "barrier_seats": 0,
+  "led_row_walkways": 0,
+  "barrier_row_walkways": 0
+ },
+ "led_floor_cells": [
+  {
+   "level": "first_floor",
+   "row": 46,
+   "column": 16,
+   "x_m": -14.25,
+   "y_m": -10.25
+  },
+  {
+   "level": "first_floor",
+   "row": 48,
+   "column": 18,
+   "x_m": -13.25,
+   "y_m": -11.25
+  },
+  {
+   "level": "first_floor",
+   "row": 52,
+   "column": 24,
+   "x_m": -10.25,
+   "y_m": -13.25
+  }
+ ],
+ "barrier_floor_cells": [],
+ "led_wall_segments": [],
+ "led_seats": [],
+ "barrier_seats": [],
+ "led_row_walkways": [],
+ "barrier_row_walkways": []
+}

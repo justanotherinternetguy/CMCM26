@@ -60,15 +60,15 @@ NODE_KIND_NAMES = ("cell", "seat", "walkway")
 EDGE_LATTICE, EDGE_SEAT_SEAT, EDGE_SEAT_WALKWAY, EDGE_WALKWAY_WALKWAY, EDGE_ROW_LINK, EDGE_STAIR = range(6)
 EDGE_KIND_NAMES = ("lattice", "seat_seat", "seat_walkway", "walkway_walkway", "row_link", "stair")
 
-# Exit label -> (level, model door names).  The portico has four physical doors but two labels.
+# Exit label -> (level, model door names).
 EXIT_DOORS: Dict[str, Tuple[int, Tuple[str, ...]]] = {
     "F1": (FIRST_FLOOR, ("front_door_-20",)),
     "F2": (FIRST_FLOOR, ("front_door_-10",)),
     "F3": (FIRST_FLOOR, ("front_door_+0",)),
     "F4": (FIRST_FLOOR, ("front_door_+10",)),
     "F5": (FIRST_FLOOR, ("front_door_+20",)),
-    "PW": (FIRST_FLOOR, ("portico_door_125", "portico_door_141")),
-    "PE": (FIRST_FLOOR, ("portico_door_40", "portico_door_55")),
+    "PW": (FIRST_FLOOR, ("portico_door_150",)),
+    "PE": (FIRST_FLOOR, ("portico_door_40",)),
     "SW": (FIRST_FLOOR, ("exit_W_room132",)),
     "SE": (FIRST_FLOOR, ("exit_E_room132",)),
     "BW": (BALCONY, ("balcony_exit_NW",)),
@@ -542,6 +542,19 @@ class Grid:
                        row_names=archive["row_names"].tolist(),
                        **{name: archive[name] for name in _ARRAY_FIELDS})
 
+    def _label_exits(self, axis, level_index: int, **text_style):
+        for exit_index, label in enumerate(self.exits):
+            rows, columns = np.nonzero(self.exit_id[level_index] == exit_index)
+            if len(rows) == 0:
+                continue
+            x_values, y_values = self.xy(rows, columns)
+            # A portico label covers two separate doors, so split the cells at any gap in y.
+            by_y = np.argsort(y_values)
+            door_groups = np.split(by_y, np.nonzero(np.diff(y_values[by_y]) > 2 * self.cell)[0] + 1)
+            for group in door_groups:
+                axis.annotate(label, (x_values[group].mean(), y_values[group].mean()), xytext=(0, -15),
+                              textcoords="offset points", ha="center", fontsize=8, **text_style)
+
     def render(self, path: str):
         import matplotlib
         matplotlib.use("Agg")
@@ -572,12 +585,7 @@ class Grid:
                     continue
                 x_values, y_values = self.xy(rows, columns)
                 axis.scatter(x_values, y_values, marker="s", s=9, c="#d1495b", linewidths=0)
-                # A portico label covers two separate doors, so split the cells at any gap in y.
-                by_y = np.argsort(y_values)
-                door_groups = np.split(by_y, np.nonzero(np.diff(y_values[by_y]) > 2 * self.cell)[0] + 1)
-                for group in door_groups:
-                    axis.annotate(label, (x_values[group].mean(), y_values[group].mean()), xytext=(0, -15),
-                                  textcoords="offset points", ha="center", fontsize=8, color="#222222")
+            self._label_exits(axis, level_index, color="#222222")
             axis.set_title(f"{LEVEL_NAMES[level_index].replace('_', ' ')}: "
                            f"{int(self.walkable[level_index].sum())} cells, {int(seat.sum())} seats", fontsize=11)
             axis.set_xlabel("x east [m]")
@@ -593,16 +601,53 @@ class Grid:
         figure.savefig(path, bbox_inches="tight")
         plt.close(figure)
 
-    def render_layout(self, path: str):
-        """Plot only the three tile types: walls, walkable tiles and seats, with no distance shading."""
+    def _gateway_classes(self) -> np.ndarray:
+        """Label each lattice cell: -1 none, 0 interior doorway, 1 exit outside, 2 stair door or landing."""
+        stair_doors = [name for name in self.doors if name.startswith("balcony_exit_")]
+        stair_cells = self.door_mask(stair_doors)
+        landings = self.edge_to[self.edge_kind == EDGE_STAIR]
+        stair_cells |= np.isin(self.cell_node, landings)
+        classes = np.full(self.walkable.shape, -1, np.int8)
+        classes[self.door_id >= 0] = 0
+        classes[self.exit_id >= 0] = 1
+        classes[stair_cells] = 2
+        return classes
+
+    def _thin_wall_segments(self, level_index: int) -> List[List[Tuple[float, float]]]:
+        """Cell edges a wall runs along: both cells are walkable but the lattice has no step between them.
+
+        These walls are thinner than a cell, so the walkable mask alone cannot show them."""
+        is_lattice = self.edge_kind == EDGE_LATTICE
+        step_keys = self.edge_from[is_lattice].astype(np.int64) * self.num_nodes + self.edge_to[is_lattice]
+        nodes = self.cell_node[level_index].astype(np.int64)
+        segments = []
+
+        def blocked(here: np.ndarray, there: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+            both_cells = (here >= 0) & (there >= 0)
+            return np.nonzero(both_cells & ~np.isin(here * self.num_nodes + there, step_keys))
+
+        for row, column in zip(*blocked(nodes[:, :-1], nodes[:, 1:])):
+            x = self.x0 + (column + 1) * self.cell
+            segments.append([(x, self.y0 - row * self.cell), (x, self.y0 - (row + 1) * self.cell)])
+        for row, column in zip(*blocked(nodes[:-1, :], nodes[1:, :])):
+            y = self.y0 - (row + 1) * self.cell
+            segments.append([(self.x0 + column * self.cell, y), (self.x0 + (column + 1) * self.cell, y)])
+        return segments
+
+    def render_layout(self, path: str, highlight_doors: bool = False):
+        """Plot walls, walkable tiles and seats with no distance shading, optionally marking door cells."""
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.collections import LineCollection
         from matplotlib.colors import ListedColormap
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
 
-        wall_color, walkable_color, seat_color = "#3a3f47", "#ece8df", "#d1495b"
+        wall_color, walkable_color = "#3a3f47", "#ece8df"
+        seat_color = "#a3a7ad" if highlight_doors else "#d1495b"
+        gateway_colors = ("#2f7fc1", "#d1495b", "#f2b01e")
+        gateways = self._gateway_classes()
         _, num_rows, num_columns = self.shape
         extent = (self.x0, self.x0 + num_columns * self.cell, self.y0 - num_rows * self.cell, self.y0)
         figure, axes = plt.subplots(1, 2, figsize=(15, 7.2), dpi=140, constrained_layout=True)
@@ -615,6 +660,14 @@ class Grid:
             # Row walkways are not lattice cells, so they are drawn as points in the walkable colour.
             axis.scatter(self.node_x[walkway], self.node_y[walkway], c=walkable_color, s=9, marker="s", linewidths=0)
             axis.scatter(self.node_x[seat], self.node_y[seat], c=seat_color, s=7, marker="s", linewidths=0)
+            if highlight_doors:
+                axis.imshow(np.where(gateways[level_index] >= 0, gateways[level_index].astype(float), np.nan),
+                            extent=extent, interpolation="nearest", cmap=ListedColormap(gateway_colors),
+                            vmin=0, vmax=2)
+                self._label_exits(axis, level_index, color="#111111",
+                                  bbox=dict(boxstyle="round,pad=0.15", facecolor="white", linewidth=0))
+            axis.add_collection(LineCollection(self._thin_wall_segments(level_index), colors=wall_color,
+                                               linewidths=2.0, capstyle="projecting", zorder=3))
             axis.set_title(f"{LEVEL_NAMES[level_index].replace('_', ' ')}: "
                            f"{int(self.walkable[level_index].sum())} cells, {int(seat.sum())} seats", fontsize=11)
             axis.set_xlabel("x east [m]")
@@ -627,8 +680,12 @@ class Grid:
         legend = [Patch(facecolor=wall_color, label="Wall or not walkable"),
                   Patch(facecolor=walkable_color, edgecolor="#999999", label="Walkable"),
                   Line2D([], [], marker="s", linestyle="", color=seat_color, label="Seat")]
-        figure.legend(handles=legend, loc="outside lower center", ncol=3, frameon=False, fontsize=10)
-        figure.suptitle(f"Hybrid grid layout at {self.cell:g} m", fontsize=12)
+        if highlight_doors:
+            legend += [Patch(facecolor=color, label=label) for color, label in
+                       zip(gateway_colors, ("Interior doorway", "Exit to outside", "Door to stairs or stair landing"))]
+        figure.legend(handles=legend, loc="outside lower center", ncol=len(legend), frameon=False, fontsize=10)
+        figure.suptitle(f"Hybrid grid {'doors and exits' if highlight_doors else 'layout'} at {self.cell:g} m",
+                        fontsize=12)
         figure.savefig(path, bbox_inches="tight")
         plt.close(figure)
 
@@ -727,7 +784,8 @@ if __name__ == "__main__":
     built_grid.save(output_stem + ".npz")
     built_grid.render(output_stem + ".png")
     built_grid.render_layout(output_stem + "_layout.png")
-    print(output_stem + ".npz", output_stem + ".png", output_stem + "_layout.png")
+    built_grid.render_layout(output_stem + "_doors.png", highlight_doors=True)
+    print(output_stem + ".npz", output_stem + ".png", output_stem + "_layout.png", output_stem + "_doors.png")
     if problems:
         print(f"{len(problems)} validation failure(s):")
         for problem in problems:

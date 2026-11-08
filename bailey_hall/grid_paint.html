@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bailey Hall grid painter</title>
+<style>
+  :root {
+    --page-background: #1b1e23;
+    --panel-background: #242830;
+    --panel-border: #343a45;
+    --text: #e6e8ec;
+    --text-muted: #9aa3b2;
+    --led: #ffb000;
+    --barrier: #ff5d73;
+    --button-background: #2e343e;
+    --button-active: #3d4655;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--page-background); color: var(--text);
+               font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display: flex; height: 100%; }
+  #panel { width: 280px; flex: none; background: var(--panel-background); border-right: 1px solid var(--panel-border);
+           padding: 14px 14px 24px; overflow-y: auto; }
+  #panel h1 { font-size: 15px; margin: 0 0 2px; }
+  #panel .subtitle { color: var(--text-muted); margin-bottom: 12px; }
+  .group { margin: 12px 0; }
+  .group > .group-title { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted);
+                          margin-bottom: 5px; }
+  .segmented { display: flex; flex-wrap: wrap; gap: 4px; }
+  button { font: inherit; color: var(--text); background: var(--button-background); border: 1px solid var(--panel-border);
+           border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--button-active); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.active { background: var(--button-active); border-color: var(--led); box-shadow: inset 0 0 0 1px var(--led); }
+  button.primary { background: #3b5bdb; border-color: #4c6ef5; }
+  button.primary:hover:not(:disabled) { background: #4c6ef5; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row > * { flex: none; }
+  input[type=range] { flex: 1; }
+  label.check { display: block; margin: 3px 0; cursor: pointer; }
+  #counts { background: #1d2127; border: 1px solid var(--panel-border); border-radius: 6px; padding: 8px 10px;
+            font-variant-numeric: tabular-nums; white-space: pre-line; }
+  #saveState { color: var(--text-muted); margin-top: 6px; min-height: 1.4em; }
+  #saveState.unsaved { color: var(--led); }
+  .legend { display: grid; grid-template-columns: 22px 1fr; gap: 4px 8px; align-items: center; color: var(--text-muted); }
+  .swatch { width: 18px; height: 18px; background: #ece8df; border: 1px solid #0006; position: relative; }
+  .swatch.led::after { content: ""; position: absolute; inset: 4px; background: var(--led); }
+  .swatch.barrier { background: #4a4f5c; }
+  .swatch.barrier::before, .swatch.barrier::after { content: ""; position: absolute; left: 2px; right: 2px; top: 50%;
+                                                    height: 2px; background: var(--barrier); }
+  .swatch.barrier::before { transform: rotate(45deg); }
+  .swatch.barrier::after { transform: rotate(-45deg); }
+  .swatch.wall { background: transparent; border: none; }
+  .swatch.wall::after { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 4px; background: var(--led);
+                        box-shadow: 0 0 6px var(--led); }
+  .help { color: var(--text-muted); font-size: 12px; }
+  .help kbd { background: #1d2127; border: 1px solid var(--panel-border); border-radius: 4px; padding: 0 4px; }
+  #stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #mapWrap { flex: 1; position: relative; min-height: 0; }
+  #mapCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #statusBar { height: 30px; flex: none; padding: 5px 12px; background: var(--panel-background);
+               border-top: 1px solid var(--panel-border); color: var(--text-muted); white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  #toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: #11151a; color: var(--text);
+           padding: 8px 14px; border-radius: 8px; border: 1px solid var(--panel-border); opacity: 0;
+           transition: opacity .2s; pointer-events: none; max-width: 80%; }
+  #toast.visible { opacity: 1; }
+  #toast.error { border-color: var(--barrier); }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <h1>Bailey Hall grid painter</h1>
+    <div class="subtitle">LEDs and barriers are separate flags: an item can have both.</div>
+
+    <div class="group">
+      <div class="group-title">Level (keys 1, 2)</div>
+      <div class="segmented" id="levelButtons">
+        <button data-value="0">First floor</button>
+        <button data-value="1">Balcony</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Paint on</div>
+      <div class="segmented" id="targetButtons">
+        <button data-value="cells" title="The 0.5 m floor tiles">Floor cells</button>
+        <button data-value="walls" title="Cell edges that have a wall on them">Walls</button>
+        <button data-value="seats" title="The seat nodes">Seats</button>
+        <button data-value="walkways" title="The walkway node in front of each seat">Row walkways</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Flag (keys L, B)</div>
+      <div class="segmented" id="propertyButtons">
+        <button data-value="led">LED</button>
+        <button data-value="barrier" title="Walls are already barriers, so they only get LEDs">Barrier</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Action (key E, or hold Shift)</div>
+      <div class="segmented" id="actionButtons">
+        <button data-value="paint">Paint</button>
+        <button data-value="erase">Erase</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Tool</div>
+      <div class="segmented" id="toolButtons">
+        <button data-value="brush">Brush</button>
+        <button data-value="rectangle">Rectangle</button>
+        <button data-value="fill" title="Floor cells only. Spreads across connected cells and stops at walls.">Fill</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Brush size (keys [ and ])</div>
+      <div class="row">
+        <input type="range" id="brushSizeSlider" min="1" max="20" step="1" value="2">
+        <span id="brushSizeLabel" style="width: 5.5em; text-align: right;"></span>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Show</div>
+      <label class="check"><input type="checkbox" id="showGridLines" checked> Cell outlines</label>
+      <label class="check"><input type="checkbox" id="showSeats" checked> Seats</label>
+      <label class="check"><input type="checkbox" id="showWalkways" checked> Row walkways</label>
+      <label class="check"><input type="checkbox" id="showExitLabels" checked> Exit labels</label>
+    </div>
+
+    <div class="group">
+      <div class="row">
+        <button id="undoButton" title="Ctrl+Z">Undo</button>
+        <button id="redoButton" title="Ctrl+Shift+Z">Redo</button>
+        <button id="fitButton" title="Key F">Fit view</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <button id="saveButton" class="primary" style="width: 100%;" title="Ctrl+S">Save</button>
+      <div id="saveState"></div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Totals (both levels)</div>
+      <div id="counts"></div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Legend</div>
+      <div class="legend">
+        <div class="swatch led"></div><div>Has LEDs</div>
+        <div class="swatch barrier"></div><div>Barrier (blocked)</div>
+        <div class="swatch wall"></div><div>Wall with LEDs</div>
+      </div>
+    </div>
+
+    <div class="group help">
+      <div class="group-title">Mouse</div>
+      Left drag paints. Wheel zooms. Right or middle drag, or <kbd>Space</kbd> + drag, pans.
+      <kbd>Esc</kbd> cancels a rectangle.
+    </div>
+  </aside>
+
+  <div id="stage">
+    <div id="mapWrap">
+      <canvas id="mapCanvas"></canvas>
+      <div id="toast"></div>
+    </div>
+    <div id="statusBar">Loading...</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ------------------------------------------------------------------ constants --
+const LAYER_NAMES = ['cellHasLed', 'cellIsBarrier', 'wallHasLedHorizontal', 'wallHasLedVertical',
+                     'seatHasLed', 'seatIsBarrier', 'walkwayHasLed', 'walkwayIsBarrier'];
+const LEVEL_TITLES = ['First floor', 'Balcony'];
+
+const COLORS = {
+  background: '#23272e',
+  floor: '#ece8df', exit: '#f2b8b8', doorway: '#b8d2ee', stairs: '#d3d8e3',
+  wall: '#14171b',
+  led: '#ffb000', ledGlow: 'rgba(255, 176, 0, 0.35)',
+  barrierFill: '#4a4f5c', barrierMark: '#ff5d73',
+  seat: '#9aa0a8', walkway: '#d9d4c7',
+  gridLine: 'rgba(0, 0, 0, 0.14)',
+  previewPaint: '#ffffff', previewErase: '#6ec1ff',
+  exitLabelText: '#111111', exitLabelBackground: 'rgba(255, 255, 255, 0.85)',
+};
+
+const mapCanvas = document.getElementById('mapCanvas');
+const mapContext = mapCanvas.getContext('2d');
+const statusBar = document.getElementById('statusBar');
+const toastBox = document.getElementById('toast');
+
+// ---------------------------------------------------------------------- state --
+let scene = null;          // grid description from the server
+let layers = {};           // painted flags (Uint8Array of 0/1 per layer name)
+
+const settings = {
+  level: 0,                // 0 first floor, 1 balcony
+  target: 'cells',         // cells | walls | seats | walkways
+  property: 'led',         // led | barrier
+  action: 'paint',         // paint | erase
+  tool: 'brush',           // brush | rectangle | fill
+  brushSize: 2,
+  showGridLines: true, showSeats: true, showWalkways: true, showExitLabels: true,
+};
+
+const view = { centerX: 0, centerY: 0, pixelsPerMeter: 10, widthPixels: 100, heightPixels: 100 };
+const pointer = { worldX: 0, worldY: 0, inside: false, shiftHeld: false };
+
+let activeDrag = null;     // { mode: 'paint' | 'rectangle' | 'pan', ... }
+let spaceHeld = false;
+let currentStroke = null;  // list of [layerName, index, oldValue] for the stroke in progress
+let strokeValue = 1;       // value written by the stroke in progress (1 paint, 0 erase)
+const undoStack = [];
+const redoStack = [];
+let hasUnsavedChanges = false;
+let countsAreStale = true;
+let redrawQueued = false;
+
+// -------------------------------------------------------------------- helpers --
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let start = 0; start < bytes.length; start += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(start, start + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function clamp(value, low, high) { return Math.min(high, Math.max(low, value)); }
+
+function showToast(message, isError) {
+  toastBox.textContent = message;
+  toastBox.classList.toggle('error', !!isError);
+  toastBox.classList.add('visible');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toastBox.classList.remove('visible'), isError ? 6000 : 2500);
+}
+
+// ---- grid indexing: all layers are flat arrays
+function cellIndex(level, row, column) { return (level * scene.numRows + row) * scene.numColumns + column; }
+function horizontalWallIndex(level, row, column) { return (level * (scene.numRows + 1) + row) * scene.numColumns + column; }
+function verticalWallIndex(level, row, column) { return (level * scene.numRows + row) * (scene.numColumns + 1) + column; }
+
+function worldToColumn(x) { return Math.floor((x - scene.westEdgeX) / scene.cellSizeMeters); }
+function worldToRow(y) { return Math.floor((scene.northEdgeY - y) / scene.cellSizeMeters); }
+function columnToWestX(column) { return scene.westEdgeX + column * scene.cellSizeMeters; }
+function rowToNorthY(row) { return scene.northEdgeY - row * scene.cellSizeMeters; }
+
+// ---- screen <-> world (world is metres, x east, y north)
+function worldToScreenX(x) { return (x - view.centerX) * view.pixelsPerMeter + view.widthPixels / 2; }
+function worldToScreenY(y) { return view.heightPixels / 2 - (y - view.centerY) * view.pixelsPerMeter; }
+function screenToWorldX(screenX) { return (screenX - view.widthPixels / 2) / view.pixelsPerMeter + view.centerX; }
+function screenToWorldY(screenY) { return (view.heightPixels / 2 - screenY) / view.pixelsPerMeter + view.centerY; }
+
+// -------------------------------------------------------------- loading scene --
+function layerSizes() {
+  const levels = scene.numLevels, rows = scene.numRows, columns = scene.numColumns;
+  const seatCount = scene.seats.x.length;
+  return {
+    cellHasLed: levels * rows * columns, cellIsBarrier: levels * rows * columns,
+    wallHasLedHorizontal: levels * (rows + 1) * columns, wallHasLedVertical: levels * rows * (columns + 1),
+    seatHasLed: seatCount, seatIsBarrier: seatCount, walkwayHasLed: seatCount, walkwayIsBarrier: seatCount,
+  };
+}
+
+function loadScene(sceneData) {
+  scene = sceneData;
+  for (const name of ['walkable', 'exitIndex', 'isDoor', 'isStairs', 'horizontalWall', 'verticalWall']) {
+    scene[name] = base64ToBytes(sceneData[name]);
+  }
+  const sizes = layerSizes();
+  layers = {};
+  for (const name of LAYER_NAMES) {
+    const savedFlags = sceneData.paint && sceneData.paint[name] ? base64ToBytes(sceneData.paint[name]) : null;
+    layers[name] = savedFlags && savedFlags.length === sizes[name] ? savedFlags : new Uint8Array(sizes[name]);
+  }
+  countsAreStale = true;
+}
+
+// ------------------------------------------------------------ editing layers --
+function setLayerValue(layerName, index, newValue) {
+  const layer = layers[layerName];
+  if (layer[index] === newValue) return;
+  if (currentStroke === null) currentStroke = [];
+  currentStroke.push([layerName, index, layer[index]]);
+  layer[index] = newValue;
+  hasUnsavedChanges = true;
+  countsAreStale = true;
+}
+
+function finishStroke() {
+  if (currentStroke !== null && currentStroke.length > 0) {
+    undoStack.push(currentStroke);
+    redoStack.length = 0;
+  }
+  currentStroke = null;
+  refreshSaveState();
+  requestRedraw();
+}
+
+function undo() {
+  const stroke = undoStack.pop();
+  if (!stroke) return;
+  for (let i = stroke.length - 1; i >= 0; i--) {
+    const [layerName, index, oldValue] = stroke[i];
+    layers[layerName][index] = oldValue;
+  }
+  redoStack.push(stroke);
+  hasUnsavedChanges = true; countsAreStale = true;
+  refreshSaveState(); requestRedraw();
+}
+
+function redo() {
+  const stroke = redoStack.pop();
+  if (!stroke) return;
+  for (const [layerName, index, oldValue] of stroke) layers[layerName][index] = 1 - oldValue;
+  undoStack.push(stroke);
+  hasUnsavedChanges = true; countsAreStale = true;
+  refreshSaveState(); requestRedraw();
+}
+
+// the layer written for the current target and flag
+function currentLayerName(target) {
+  const flag = settings.property === 'led' ? 'HasLed' : 'IsBarrier';
+  if (target === 'cells') return 'cell' + flag;
+  if (target === 'seats') return 'seat' + flag;
+  return 'walkway' + flag;
+}
+
+function isErasing() { return (settings.action === 'erase') !== pointer.shiftHeld; }
+
+// ------------------------------------------------------------------- brushes --
+function paintCellRange(rowStart, rowEnd, columnStart, columnEnd) {
+  const layerName = currentLayerName('cells');
+  const level = settings.level;
+  for (let row = Math.max(0, rowStart); row <= Math.min(scene.numRows - 1, rowEnd); row++) {
+    for (let column = Math.max(0, columnStart); column <= Math.min(scene.numColumns - 1, columnEnd); column++) {
+      const index = cellIndex(level, row, column);
+      if (scene.walkable[index]) setLayerValue(layerName, index, strokeValue);
+    }
+  }
+}
+
+// Visit every wall edge on the current level whose midpoint is inside the window.
+// visit(layerName, index, x1, y1, x2, y2)
+function forEachWallEdgeInWindow(minX, maxX, minY, maxY, visit) {
+  const cell = scene.cellSizeMeters, rows = scene.numRows, columns = scene.numColumns, level = settings.level;
+  const columnLow = Math.max(0, worldToColumn(minX) - 1), columnHigh = Math.min(columns, worldToColumn(maxX) + 1);
+  const rowLow = Math.max(0, worldToRow(maxY) - 1), rowHigh = Math.min(rows, worldToRow(minY) + 1);
+
+  for (let row = rowLow; row <= rowHigh; row++) {                       // horizontal edges: rows 0..rows
+    for (let column = columnLow; column <= Math.min(columnHigh, columns - 1); column++) {
+      const index = horizontalWallIndex(level, row, column);
+      if (!scene.horizontalWall[index]) continue;
+      const y = rowToNorthY(row), xWest = columnToWestX(column), xEast = xWest + cell;
+      const midX = xWest + cell / 2;
+      if (midX < minX || midX > maxX || y < minY || y > maxY) continue;
+      visit('wallHasLedHorizontal', index, xWest, y, xEast, y);
+    }
+  }
+  for (let row = rowLow; row <= Math.min(rowHigh, rows - 1); row++) {   // vertical edges: columns 0..columns
+    for (let column = columnLow; column <= columnHigh; column++) {
+      const index = verticalWallIndex(level, row, column);
+      if (!scene.verticalWall[index]) continue;
+      const x = columnToWestX(column), yNorth = rowToNorthY(row), ySouth = yNorth - cell;
+      const midY = yNorth - cell / 2;
+      if (x < minX || x > maxX || midY < minY || midY > maxY) continue;
+      visit('wallHasLedVertical', index, x, yNorth, x, ySouth);
+    }
+  }
+}
+
+// Visit every seat (or walkway) node on the current level inside the window.  visit(index, x, y)
+function forEachNodeInWindow(nodes, minX, maxX, minY, maxY, visit) {
+  const level = settings.level;
+  for (let index = 0; index < nodes.x.length; index++) {
+    if (nodes.level[index] !== level) continue;
+    const x = nodes.x[index], y = nodes.y[index];
+    if (x < minX || x > maxX || y < minY || y > maxY) continue;
+    visit(index, x, y);
+  }
+}
+
+function brushRadius() {
+  const cell = scene.cellSizeMeters;
+  if (settings.brushSize === 1) return settings.target === 'walls' ? 0.75 * cell : 0.5;   // pick the nearest one
+  return settings.brushSize * cell / 2;
+}
+
+// Walls, seats or walkways under the brush.  With a brush of size 1 only the nearest one counts.
+function collectBrushTargets(worldX, worldY) {
+  const radius = brushRadius();
+  const found = [];
+  const minX = worldX - radius, maxX = worldX + radius, minY = worldY - radius, maxY = worldY + radius;
+  if (settings.target === 'walls') {
+    forEachWallEdgeInWindow(minX, maxX, minY, maxY, (layerName, index, x1, y1, x2, y2) => {
+      const distance = Math.hypot((x1 + x2) / 2 - worldX, (y1 + y2) / 2 - worldY);
+      if (distance <= radius) found.push({ layerName, index, distance, x1, y1, x2, y2 });
+    });
+  } else if (settings.target === 'seats' || settings.target === 'walkways') {
+    const nodes = settings.target === 'seats' ? scene.seats : scene.walkways;
+    const layerName = currentLayerName(settings.target);
+    forEachNodeInWindow(nodes, minX, maxX, minY, maxY, (index, x, y) => {
+      const distance = Math.hypot(x - worldX, y - worldY);
+      if (distance <= radius) found.push({ layerName, index, distance, x, y });
+    });
+  }
+  if (settings.brushSize === 1 && found.length > 1) {
+    found.sort((a, b) => a.distance - b.distance);
+    return [found[0]];
+  }
+  return found;
+}
+
+function brushCellRange(worldX, worldY) {
+  const size = settings.brushSize, half = Math.floor((size - 1) / 2);
+  const row = worldToRow(worldY) - half, column = worldToColumn(worldX) - half;
+  return { rowStart: row, rowEnd: row + size - 1, columnStart: column, columnEnd: column + size - 1 };
+}
+
+function applyBrushAt(worldX, worldY) {
+  if (settings.target === 'cells') {
+    const range = brushCellRange(worldX, worldY);
+    paintCellRange(range.rowStart, range.rowEnd, range.columnStart, range.columnEnd);
+  } else {
+    for (const target of collectBrushTargets(worldX, worldY)) {
+      setLayerValue(target.layerName, target.index, strokeValue);
+    }
+  }
+}
+
+// ---- rectangle: snapped to whole cells so walls on its outline are included
+function snappedRectangle(startX, startY, endX, endY) {
+  const rowStart = clamp(Math.min(worldToRow(startY), worldToRow(endY)), 0, scene.numRows - 1);
+  const rowEnd = clamp(Math.max(worldToRow(startY), worldToRow(endY)), 0, scene.numRows - 1);
+  const columnStart = clamp(Math.min(worldToColumn(startX), worldToColumn(endX)), 0, scene.numColumns - 1);
+  const columnEnd = clamp(Math.max(worldToColumn(startX), worldToColumn(endX)), 0, scene.numColumns - 1);
+  return { rowStart, rowEnd, columnStart, columnEnd,
+           minX: columnToWestX(columnStart), maxX: columnToWestX(columnEnd + 1),
+           minY: rowToNorthY(rowEnd + 1), maxY: rowToNorthY(rowStart) };
+}
+
+function applyRectangle(startX, startY, endX, endY) {
+  const box = snappedRectangle(startX, startY, endX, endY);
+  const slack = 1e-6;
+  if (settings.target === 'cells') {
+    paintCellRange(box.rowStart, box.rowEnd, box.columnStart, box.columnEnd);
+  } else if (settings.target === 'walls') {
+    forEachWallEdgeInWindow(box.minX - slack, box.maxX + slack, box.minY - slack, box.maxY + slack,
+                            (layerName, index) => setLayerValue(layerName, index, strokeValue));
+  } else {
+    const nodes = settings.target === 'seats' ? scene.seats : scene.walkways;
+    const layerName = currentLayerName(settings.target);
+    forEachNodeInWindow(nodes, box.minX, box.maxX, box.minY, box.maxY,
+                        (index) => setLayerValue(layerName, index, strokeValue));
+  }
+}
+
+// ---- fill: spreads over connected walkable cells that currently hold the same value; stops at walls
+function floodFillCells(startRow, startColumn) {
+  const level = settings.level, rows = scene.numRows, columns = scene.numColumns;
+  if (startRow < 0 || startRow >= rows || startColumn < 0 || startColumn >= columns) return;
+  const startIndex = cellIndex(level, startRow, startColumn);
+  if (!scene.walkable[startIndex]) return;
+  const layerName = currentLayerName('cells');
+  const layer = layers[layerName];
+  const valueToReplace = layer[startIndex];
+  if (valueToReplace === strokeValue) return;
+
+  const visited = new Uint8Array(rows * columns);
+  const pending = [[startRow, startColumn]];
+  visited[startRow * columns + startColumn] = 1;
+  const tryVisit = (row, column) => {
+    if (row < 0 || row >= rows || column < 0 || column >= columns) return;
+    if (visited[row * columns + column]) return;
+    const index = cellIndex(level, row, column);
+    if (!scene.walkable[index] || layer[index] !== valueToReplace) return;
+    visited[row * columns + column] = 1;
+    pending.push([row, column]);
+  };
+  while (pending.length > 0) {
+    const [row, column] = pending.pop();
+    setLayerValue(layerName, cellIndex(level, row, column), strokeValue);
+    if (!scene.verticalWall[verticalWallIndex(level, row, column + 1)]) tryVisit(row, column + 1);
+    if (!scene.verticalWall[verticalWallIndex(level, row, column)]) tryVisit(row, column - 1);
+    if (!scene.horizontalWall[horizontalWallIndex(level, row, column)]) tryVisit(row - 1, column);
+    if (!scene.horizontalWall[horizontalWallIndex(level, row + 1, column)]) tryVisit(row + 1, column);
+  }
+}
+
+// -------------------------------------------------------------------- drawing --
+function requestRedraw() {
+  if (redrawQueued) return;
+  redrawQueued = true;
+  requestAnimationFrame(draw);
+}
+
+function drawTile(left, top, sizePixels, baseColor, hasLed, isBarrier) {
+  mapContext.fillStyle = isBarrier ? COLORS.barrierFill : baseColor;
+  mapContext.fillRect(left, top, sizePixels + 0.5, sizePixels + 0.5);
+  if (hasLed) {
+    const inset = sizePixels * 0.22;
+    mapContext.fillStyle = COLORS.led;
+    mapContext.fillRect(left + inset, top + inset, sizePixels - 2 * inset, sizePixels - 2 * inset);
+  }
+  if (isBarrier) {
+    const inset = sizePixels * 0.12;
+    mapContext.strokeStyle = COLORS.barrierMark;
+    mapContext.lineWidth = Math.max(1, sizePixels * 0.1);
+    mapContext.beginPath();
+    mapContext.moveTo(left + inset, top + inset); mapContext.lineTo(left + sizePixels - inset, top + sizePixels - inset);
+    mapContext.moveTo(left + sizePixels - inset, top + inset); mapContext.lineTo(left + inset, top + sizePixels - inset);
+    mapContext.stroke();
+  }
+}
+
+function drawNodes(nodes, sizeMeters, baseColor, hasLedLayer, isBarrierLayer) {
+  const sizePixels = Math.max(2, sizeMeters * view.pixelsPerMeter);
+  for (let index = 0; index < nodes.x.length; index++) {
+    if (nodes.level[index] !== settings.level) continue;
+    const left = worldToScreenX(nodes.x[index]) - sizePixels / 2;
+    const top = worldToScreenY(nodes.y[index]) - sizePixels / 2;
+    if (left < -sizePixels || top < -sizePixels || left > view.widthPixels || top > view.heightPixels) continue;
+    drawTile(left, top, sizePixels, baseColor, layers[hasLedLayer][index] === 1, layers[isBarrierLayer][index] === 1);
+  }
+}
+
+function draw() {
+  redrawQueued = false;
+  if (!scene) return;
+  const pixelRatio = mapCanvas.width / view.widthPixels;
+  mapContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  mapContext.fillStyle = COLORS.background;
+  mapContext.fillRect(0, 0, view.widthPixels, view.heightPixels);
+
+  const cell = scene.cellSizeMeters, cellPixels = cell * view.pixelsPerMeter;
+  const level = settings.level, rows = scene.numRows, columns = scene.numColumns;
+  const columnStart = clamp(worldToColumn(screenToWorldX(0)), 0, columns - 1);
+  const columnEnd = clamp(worldToColumn(screenToWorldX(view.widthPixels)), 0, columns - 1);
+  const rowStart = clamp(worldToRow(screenToWorldY(0)), 0, rows - 1);
+  const rowEnd = clamp(worldToRow(screenToWorldY(view.heightPixels)), 0, rows - 1);
+
+  // ---- floor cells
+  const gridLinePath = new Path2D();
+  for (let row = rowStart; row <= rowEnd; row++) {
+    for (let column = columnStart; column <= columnEnd; column++) {
+      const index = cellIndex(level, row, column);
+      if (!scene.walkable[index]) continue;
+      const left = worldToScreenX(columnToWestX(column)), top = worldToScreenY(rowToNorthY(row));
+      let floorColor = COLORS.floor;
+      if (scene.exitIndex[index] !== 255) floorColor = COLORS.exit;
+      else if (scene.isDoor[index]) floorColor = COLORS.doorway;
+      else if (scene.isStairs[index]) floorColor = COLORS.stairs;
+      drawTile(left, top, cellPixels, floorColor, layers.cellHasLed[index] === 1, layers.cellIsBarrier[index] === 1);
+      if (settings.showGridLines) gridLinePath.rect(left, top, cellPixels, cellPixels);
+    }
+  }
+  if (settings.showGridLines && cellPixels >= 6) {
+    mapContext.strokeStyle = COLORS.gridLine;
+    mapContext.lineWidth = 1;
+    mapContext.stroke(gridLinePath);
+  }
+
+  // ---- seats and row walkways
+  if (settings.showSeats) drawNodes(scene.seats, 0.3, COLORS.seat, 'seatHasLed', 'seatIsBarrier');
+  if (settings.showWalkways) drawNodes(scene.walkways, 0.18, COLORS.walkway, 'walkwayHasLed', 'walkwayIsBarrier');
+
+  // ---- walls
+  const wallPath = new Path2D(), ledWallPath = new Path2D();
+  for (let row = rowStart; row <= rowEnd + 1 && row <= rows; row++) {
+    for (let column = columnStart; column <= columnEnd; column++) {
+      const index = horizontalWallIndex(level, row, column);
+      if (!scene.horizontalWall[index]) continue;
+      const y = worldToScreenY(rowToNorthY(row)), xWest = worldToScreenX(columnToWestX(column));
+      wallPath.moveTo(xWest, y); wallPath.lineTo(xWest + cellPixels, y);
+      if (layers.wallHasLedHorizontal[index]) { ledWallPath.moveTo(xWest, y); ledWallPath.lineTo(xWest + cellPixels, y); }
+    }
+  }
+  for (let row = rowStart; row <= rowEnd; row++) {
+    for (let column = columnStart; column <= columnEnd + 1 && column <= columns; column++) {
+      const index = verticalWallIndex(level, row, column);
+      if (!scene.verticalWall[index]) continue;
+      const x = worldToScreenX(columnToWestX(column)), yNorth = worldToScreenY(rowToNorthY(row));
+      wallPath.moveTo(x, yNorth); wallPath.lineTo(x, yNorth + cellPixels);
+      if (layers.wallHasLedVertical[index]) { ledWallPath.moveTo(x, yNorth); ledWallPath.lineTo(x, yNorth + cellPixels); }
+    }
+  }
+  mapContext.lineCap = 'square';
+  mapContext.strokeStyle = COLORS.wall;
+  mapContext.lineWidth = Math.max(1.5, cellPixels * 0.1);
+  mapContext.stroke(wallPath);
+  const ledWidth = Math.max(3, cellPixels * 0.26);
+  mapContext.strokeStyle = COLORS.ledGlow;
+  mapContext.lineWidth = ledWidth * 2.4;
+  mapContext.stroke(ledWallPath);
+  mapContext.strokeStyle = COLORS.led;
+  mapContext.lineWidth = ledWidth;
+  mapContext.stroke(ledWallPath);
+  mapContext.lineCap = 'butt';
+
+  // ---- exit labels
+  if (settings.showExitLabels) {
+    mapContext.font = '600 11px system-ui, sans-serif';
+    mapContext.textAlign = 'center';
+    mapContext.textBaseline = 'middle';
+    for (const exitLabel of scene.exitLabels) {
+      if (exitLabel.level !== level) continue;
+      const x = worldToScreenX(exitLabel.x), y = worldToScreenY(exitLabel.y) + 16;
+      const textWidth = mapContext.measureText(exitLabel.label).width + 8;
+      mapContext.fillStyle = COLORS.exitLabelBackground;
+      mapContext.fillRect(x - textWidth / 2, y - 8, textWidth, 16);
+      mapContext.fillStyle = COLORS.exitLabelText;
+      mapContext.fillText(exitLabel.label, x, y);
+    }
+  }
+
+  drawBrushPreview(cellPixels);
+
+  if (countsAreStale) updateCounts();
+}
+
+function drawCellBox(rowStart, rowEnd, columnStart, columnEnd) {
+  const left = worldToScreenX(columnToWestX(columnStart)), top = worldToScreenY(rowToNorthY(rowStart));
+  const width = worldToScreenX(columnToWestX(columnEnd + 1)) - left;
+  const height = worldToScreenY(rowToNorthY(rowEnd + 1)) - top;
+  mapContext.fillStyle = isErasing() ? 'rgba(110, 193, 255, 0.18)' : 'rgba(255, 255, 255, 0.18)';
+  mapContext.fillRect(left, top, width, height);
+  mapContext.strokeRect(left, top, width, height);
+}
+
+function drawBrushPreview(cellPixels) {
+  if (!pointer.inside || (activeDrag && activeDrag.mode === 'pan') || spaceHeld) return;
+  mapContext.strokeStyle = isErasing() ? COLORS.previewErase : COLORS.previewPaint;
+  mapContext.lineWidth = 1.5;
+
+  if (activeDrag && activeDrag.mode === 'rectangle') {
+    const box = snappedRectangle(activeDrag.startX, activeDrag.startY, pointer.worldX, pointer.worldY);
+    drawCellBox(box.rowStart, box.rowEnd, box.columnStart, box.columnEnd);
+    return;
+  }
+  const row = worldToRow(pointer.worldY), column = worldToColumn(pointer.worldX);
+  if (settings.tool === 'fill' || settings.tool === 'rectangle') {
+    drawCellBox(row, row, column, column);
+    return;
+  }
+  if (settings.target === 'cells') {
+    const range = brushCellRange(pointer.worldX, pointer.worldY);
+    drawCellBox(range.rowStart, range.rowEnd, range.columnStart, range.columnEnd);
+    return;
+  }
+  // walls, seats, walkways: ring for the brush area and a mark on each thing it will touch
+  const centerX = worldToScreenX(pointer.worldX), centerY = worldToScreenY(pointer.worldY);
+  if (settings.brushSize > 1) {
+    mapContext.beginPath();
+    mapContext.arc(centerX, centerY, brushRadius() * view.pixelsPerMeter, 0, 2 * Math.PI);
+    mapContext.stroke();
+  }
+  mapContext.lineWidth = 3;
+  for (const target of collectBrushTargets(pointer.worldX, pointer.worldY)) {
+    mapContext.beginPath();
+    if (settings.target === 'walls') {
+      mapContext.moveTo(worldToScreenX(target.x1), worldToScreenY(target.y1));
+      mapContext.lineTo(worldToScreenX(target.x2), worldToScreenY(target.y2));
+    } else {
+      mapContext.arc(worldToScreenX(target.x), worldToScreenY(target.y), Math.max(4, 0.25 * view.pixelsPerMeter), 0, 2 * Math.PI);
+    }
+    mapContext.stroke();
+  }
+}
+
+// ----------------------------------------------------------- counts and status --
+function countFlags(layerName) {
+  let total = 0;
+  const layer = layers[layerName];
+  for (let i = 0; i < layer.length; i++) total += layer[i];
+  return total;
+}
+
+function updateCounts() {
+  countsAreStale = false;
+  const wallLedSegments = countFlags('wallHasLedHorizontal') + countFlags('wallHasLedVertical');
+  const wallLedMeters = wallLedSegments * scene.cellSizeMeters;
+  document.getElementById('counts').textContent =
+    `LED floor cells: ${countFlags('cellHasLed')}\n` +
+    `Barrier floor cells: ${countFlags('cellIsBarrier')}\n` +
+    `LED wall segments: ${wallLedSegments} (${wallLedMeters.toFixed(1)} m)\n` +
+    `LED seats: ${countFlags('seatHasLed')}   Barrier seats: ${countFlags('seatIsBarrier')}\n` +
+    `LED row walkways: ${countFlags('walkwayHasLed')}   Barrier: ${countFlags('walkwayIsBarrier')}`;
+}
+
+function refreshSaveState() {
+  const saveState = document.getElementById('saveState');
+  saveState.textContent = hasUnsavedChanges ? 'Unsaved changes' : `Saved to ${scene.savePath}`;
+  saveState.classList.toggle('unsaved', hasUnsavedChanges);
+  document.getElementById('undoButton').disabled = undoStack.length === 0;
+  document.getElementById('redoButton').disabled = redoStack.length === 0;
+}
+
+function describeCellUnderPointer() {
+  const row = worldToRow(pointer.worldY), column = worldToColumn(pointer.worldX);
+  const where = `${LEVEL_TITLES[settings.level] || scene.levelNames[settings.level]}   x ${pointer.worldX.toFixed(2)} m, y ${pointer.worldY.toFixed(2)} m`;
+  if (row < 0 || row >= scene.numRows || column < 0 || column >= scene.numColumns) return where;
+  const index = cellIndex(settings.level, row, column);
+  if (!scene.walkable[index]) return `${where}   |   row ${row}, column ${column}: not walkable`;
+  let kind = 'floor';
+  if (scene.exitIndex[index] !== 255) kind = `exit ${scene.exitNames[scene.exitIndex[index]]}`;
+  else if (scene.isDoor[index]) kind = 'doorway';
+  else if (scene.isStairs[index]) kind = 'stairs';
+  const led = layers.cellHasLed[index] ? 'LED' : 'no LED';
+  const barrier = layers.cellIsBarrier[index] ? 'barrier' : 'open';
+  return `${where}   |   row ${row}, column ${column}: ${kind}, ${led}, ${barrier}`;
+}
+
+function updateStatus() {
+  if (!scene) return;
+  statusBar.textContent = describeCellUnderPointer();
+}
+
+// --------------------------------------------------------------------- saving --
+async function saveToServer() {
+  const encodedLayers = {};
+  for (const name of LAYER_NAMES) encodedLayers[name] = bytesToBase64(layers[name]);
+  try {
+    const response = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ layers: encodedLayers }) });
+    const result = await response.json();
+    if (!result.ok) throw new Error(result.error);
+    hasUnsavedChanges = false;
+    scene.savePath = result.path;
+    refreshSaveState();
+    showToast(`Saved. ${result.counts.led_floor_cells} LED cells, ${result.counts.barrier_floor_cells} barrier cells, ` +
+              `${result.counts.led_wall_segments} LED wall segments.`);
+  } catch (problem) {
+    showToast(`Save failed: ${problem.message}`, true);
+  }
+}
+
+// ------------------------------------------------------------------- controls --
+const segmentedControls = {
+  levelButtons: 'level', targetButtons: 'target', propertyButtons: 'property', actionButtons: 'action', toolButtons: 'tool',
+};
+
+function refreshControls() {
+  // walls only get LEDs; fill only works on floor cells
+  if (settings.target === 'walls' && settings.property === 'barrier') settings.property = 'led';
+  if (settings.target !== 'cells' && settings.tool === 'fill') settings.tool = 'brush';
+  document.querySelector('#propertyButtons [data-value=barrier]').disabled = settings.target === 'walls';
+  document.querySelector('#toolButtons [data-value=fill]').disabled = settings.target !== 'cells';
+
+  for (const [containerId, key] of Object.entries(segmentedControls)) {
+    for (const button of document.querySelectorAll(`#${containerId} button`)) {
+      button.classList.toggle('active', String(settings[key]) === button.dataset.value);
+    }
+  }
+  const sizeText = settings.target === 'cells' ? `${settings.brushSize} x ${settings.brushSize}` : `${settings.brushSize}`;
+  document.getElementById('brushSizeLabel').textContent = sizeText + ' cells';
+  document.getElementById('brushSizeSlider').value = settings.brushSize;
+  for (const name of ['showGridLines', 'showSeats', 'showWalkways', 'showExitLabels']) {
+    document.getElementById(name).checked = settings[name];
+  }
+  requestRedraw();
+}
+
+function changeSetting(key, rawValue) {
+  settings[key] = key === 'level' ? Number(rawValue) : rawValue;
+  if (key === 'target' && rawValue === 'seats') settings.showSeats = true;
+  if (key === 'target' && rawValue === 'walkways') settings.showWalkways = true;
+  refreshControls();
+  updateStatus();
+}
+
+for (const [containerId, key] of Object.entries(segmentedControls)) {
+  document.getElementById(containerId).addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-value]');
+    if (button && !button.disabled) changeSetting(key, button.dataset.value);
+  });
+}
+document.getElementById('brushSizeSlider').addEventListener('input', (event) => {
+  settings.brushSize = Number(event.target.value);
+  refreshControls();
+});
+for (const name of ['showGridLines', 'showSeats', 'showWalkways', 'showExitLabels']) {
+  document.getElementById(name).addEventListener('change', (event) => { settings[name] = event.target.checked; requestRedraw(); });
+}
+document.getElementById('undoButton').addEventListener('click', undo);
+document.getElementById('redoButton').addEventListener('click', redo);
+document.getElementById('fitButton').addEventListener('click', fitToView);
+document.getElementById('saveButton').addEventListener('click', saveToServer);
+// a focused button would be "clicked" again by the Space key, which is the pan key
+document.getElementById('panel').addEventListener('click', (event) => {
+  if (event.target.tagName === 'BUTTON') event.target.blur();
+});
+
+// ------------------------------------------------------------------ view setup --
+function resizeCanvas() {
+  const bounds = mapCanvas.getBoundingClientRect();
+  const pixelRatio = window.devicePixelRatio || 1;
+  view.widthPixels = Math.max(1, bounds.width);
+  view.heightPixels = Math.max(1, bounds.height);
+  mapCanvas.width = Math.round(view.widthPixels * pixelRatio);
+  mapCanvas.height = Math.round(view.heightPixels * pixelRatio);
+  requestRedraw();
+}
+
+function fitToView() {
+  if (!scene) return;
+  const widthMeters = scene.numColumns * scene.cellSizeMeters, heightMeters = scene.numRows * scene.cellSizeMeters;
+  view.centerX = scene.westEdgeX + widthMeters / 2;
+  view.centerY = scene.northEdgeY - heightMeters / 2;
+  view.pixelsPerMeter = 0.96 * Math.min(view.widthPixels / widthMeters, view.heightPixels / heightMeters);
+  requestRedraw();
+}
+
+new ResizeObserver(resizeCanvas).observe(mapCanvas);
+
+// ---------------------------------------------------------------------- mouse --
+function eventToWorld(event) {
+  const bounds = mapCanvas.getBoundingClientRect();
+  const screenX = event.clientX - bounds.left, screenY = event.clientY - bounds.top;
+  return { screenX, screenY, worldX: screenToWorldX(screenX), worldY: screenToWorldY(screenY) };
+}
+
+mapCanvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+mapCanvas.addEventListener('mousedown', (event) => {
+  if (!scene) return;
+  const where = eventToWorld(event);
+  pointer.worldX = where.worldX; pointer.worldY = where.worldY; pointer.shiftHeld = event.shiftKey;
+
+  if (event.button === 1 || event.button === 2 || (event.button === 0 && spaceHeld)) {
+    activeDrag = { mode: 'pan', lastScreenX: where.screenX, lastScreenY: where.screenY };
+    mapCanvas.style.cursor = 'grabbing';
+    event.preventDefault();
+    return;
+  }
+  if (event.button !== 0) return;
+
+  strokeValue = isErasing() ? 0 : 1;
+  currentStroke = [];
+  if (settings.tool === 'brush') {
+    activeDrag = { mode: 'paint', lastX: where.worldX, lastY: where.worldY };
+    applyBrushAt(where.worldX, where.worldY);
+  } else if (settings.tool === 'rectangle') {
+    activeDrag = { mode: 'rectangle', startX: where.worldX, startY: where.worldY };
+  } else {
+    floodFillCells(worldToRow(where.worldY), worldToColumn(where.worldX));
+    finishStroke();
+  }
+  requestRedraw();
+});
+
+window.addEventListener('mousemove', (event) => {
+  if (!scene) return;
+  const where = eventToWorld(event);
+  const bounds = mapCanvas.getBoundingClientRect();
+  pointer.inside = event.clientX >= bounds.left && event.clientX <= bounds.right &&
+                   event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+  pointer.worldX = where.worldX; pointer.worldY = where.worldY; pointer.shiftHeld = event.shiftKey;
+
+  if (activeDrag && activeDrag.mode === 'pan') {
+    view.centerX -= (where.screenX - activeDrag.lastScreenX) / view.pixelsPerMeter;
+    view.centerY += (where.screenY - activeDrag.lastScreenY) / view.pixelsPerMeter;
+    activeDrag.lastScreenX = where.screenX; activeDrag.lastScreenY = where.screenY;
+  } else if (activeDrag && activeDrag.mode === 'paint') {
+    // fill in the gaps so a fast stroke leaves no holes
+    const deltaX = where.worldX - activeDrag.lastX, deltaY = where.worldY - activeDrag.lastY;
+    const steps = Math.max(1, Math.ceil(Math.hypot(deltaX, deltaY) / (scene.cellSizeMeters / 2)));
+    for (let step = 1; step <= steps; step++) {
+      applyBrushAt(activeDrag.lastX + deltaX * step / steps, activeDrag.lastY + deltaY * step / steps);
+    }
+    activeDrag.lastX = where.worldX; activeDrag.lastY = where.worldY;
+  }
+  updateStatus();
+  requestRedraw();
+});
+
+window.addEventListener('mouseup', (event) => {
+  if (!activeDrag) return;
+  if (activeDrag.mode === 'pan') {
+    mapCanvas.style.cursor = spaceHeld ? 'grab' : 'crosshair';
+  } else if (activeDrag.mode === 'rectangle') {
+    const where = eventToWorld(event);
+    applyRectangle(activeDrag.startX, activeDrag.startY, where.worldX, where.worldY);
+    finishStroke();
+  } else {
+    finishStroke();
+  }
+  activeDrag = null;
+  requestRedraw();
+});
+
+mapCanvas.addEventListener('mouseleave', () => { pointer.inside = false; requestRedraw(); });
+
+mapCanvas.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  const where = eventToWorld(event);
+  view.pixelsPerMeter = clamp(view.pixelsPerMeter * Math.exp(-event.deltaY * 0.0015), 2, 600);
+  // keep the point under the cursor where it was
+  view.centerX += where.worldX - screenToWorldX(where.screenX);
+  view.centerY += where.worldY - screenToWorldY(where.screenY);
+  requestRedraw();
+}, { passive: false });
+
+// ------------------------------------------------------------------- keyboard --
+window.addEventListener('keydown', (event) => {
+  if (!scene) return;
+  const modifier = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+  if (modifier && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
+  if (modifier && key === 'y') { event.preventDefault(); redo(); return; }
+  if (modifier && key === 's') { event.preventDefault(); saveToServer(); return; }
+  if (modifier) return;
+
+  if (event.key === 'Shift') { pointer.shiftHeld = true; requestRedraw(); return; }
+  if (event.key === ' ') {
+    event.preventDefault();
+    spaceHeld = true;
+    mapCanvas.style.cursor = 'grab';
+    return;
+  }
+  if (event.key === 'Escape' && activeDrag && activeDrag.mode === 'rectangle') {
+    activeDrag = null; currentStroke = null; requestRedraw(); return;
+  }
+  if (event.target && event.target.tagName === 'INPUT' && event.target.type !== 'range') return;
+  if (key === '1') changeSetting('level', 0);
+  else if (key === '2') changeSetting('level', 1);
+  else if (key === 'l') changeSetting('property', 'led');
+  else if (key === 'b' && settings.target !== 'walls') changeSetting('property', 'barrier');
+  else if (key === 'e') changeSetting('action', settings.action === 'erase' ? 'paint' : 'erase');
+  else if (key === 'f') fitToView();
+  else if (event.key === '[') { settings.brushSize = Math.max(1, settings.brushSize - 1); refreshControls(); }
+  else if (event.key === ']') { settings.brushSize = Math.min(20, settings.brushSize + 1); refreshControls(); }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (event.key === 'Shift') { pointer.shiftHeld = false; requestRedraw(); }
+  if (event.key === ' ') { spaceHeld = false; mapCanvas.style.cursor = 'crosshair'; requestRedraw(); }
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (hasUnsavedChanges) { event.preventDefault(); event.returnValue = ''; }
+});
+
+// ---------------------------------------------------------------------- start --
+async function start() {
+  try {
+    const response = await fetch('/api/scene');
+    loadScene(await response.json());
+  } catch (problem) {
+    statusBar.textContent = `Could not load the grid from the server: ${problem.message}`;
+    return;
+  }
+  resizeCanvas();
+  fitToView();
+  refreshControls();
+  refreshSaveState();
+  updateStatus();
+}
+start();
+</script>
+</body>
+</html>

@@ -65,7 +65,7 @@ First floor
 * **Corridor**: 9 ft wide (r = 51.5..60.5 ft), straight legs north to y = +29.4 ft where it enters
   room 132 / 10060 with an exterior door; bulges south into the vestibule (10041) which has the
   **three 5 ft doors to the foyer** at y = -63.2 ft.
-* **Four portico doors** (4 ft) in the exterior wall at 39.5, 55, 125 and 141 deg (plan angles,
+* **Two portico doors** (4 ft) in the exterior wall at 39.5 and 149.6 deg, one per side, each facing an exterior stair (plan angles,
   clockwise from east); the portico and the two exterior stairs to street level are optional
   outdoor zones (`Model.outdoor`).
 * **Foyer** 48 x 19 ft with **five 5.5 ft front doors** onto the monumental stair (outdoor zone).
@@ -118,7 +118,7 @@ door widths, portico extent). Everything is a `Params` field, so change a number
 * The two main balcony stairs are one-way links with a fixed cost of 18.29 (30 ft x 2.0), landing
   in the vestibule corners. The stage-side balcony stairs are not in the graph: BW and BE end at
   the balcony door, so add that stair's time in the simulation.
-* 11 exit labels: F1-F5 (west to east), PW and PE (two portico doors each), SW and SE (room 132),
+* 11 exit labels: F1-F5 (west to east), PW and PE (one portico door each), SW and SE (room 132),
   BW and BE. Close a gate with `grid.distance_field(blocked=grid.exit_mask("F3"))`.
 
 `grid.dist` and `grid.node_dist` are weighted costs, not walking distances or times.

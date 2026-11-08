@@ -9,6 +9,7 @@ from scipy.spatial import cKDTree
 from animate import RUN_PATH, save_run
 from grid import COST_STAIRS, Grid
 from model import FT, Model
+from grid import COST_STAIRS, NODE_SEAT, Grid
 
 MAX_WALKING_SPEED_M_PER_S = 1.4
 RANDOM_SEED = 6767
@@ -18,9 +19,11 @@ INCLUDE_NORTH_STAIR_COST = True
 
 NUM_DIRECTIONS = 8
 SOCIAL_RADIUS = 2.0
-HERD_STRENGTH = 3.0             
+HERD_STRENGTH = 2             
 REEVALUATE_EVERY_STEPS = 30     
-TARGET_CHOICE_SHARPNESS = 0.3   
+TARGET_CHOICE_SHARPNESS = 1
+PATIENCE_STEPS = 10   
+VIEW_RANGE = 15.0
 
 # The five main entrances at the front.
 MAIN_ENTRANCE_LABELS = ("F1", "F2", "F3", "F4", "F5")
@@ -106,6 +109,7 @@ class Agents:
     movement_budget: np.ndarray         # cause people move different speeds so they move once they've accumulated a budget to move
     heading_to_door: np.ndarray         # True until the agent gets out the auditorium
     last_move_direction: np.ndarray     # index of the agent's last move, -1 if it has not moved
+    has_left_seats: np.ndarray          # True once the agent has stepped onto a non-seat node
 
     @property
     def num_agents(self) -> int:
@@ -153,6 +157,7 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         movement_budget=np.zeros(num_seats),
         heading_to_door=np.ones(num_seats, bool),
         last_move_direction=np.full(num_seats, -1, np.int8),
+        has_left_seats=np.zeros(num_seats, bool),
     )
 
     occupant_at_node = np.full(grid.num_nodes, -1, np.int32)
@@ -199,6 +204,12 @@ def choose_next_edge(grid, agent_id, agents, occupant_at_node, cost_to_target, t
 
     distance_gained = cost_to_target[current_node] - cost_to_target[neighbor_nodes]
     can_enter = (occupant_at_node[neighbor_nodes] < 0) & np.isfinite(distance_gained)
+    if agents.has_left_seats[agent_id]:
+        can_enter &= grid.node_kind[neighbor_nodes] != NODE_SEAT
+    # if grid.node_kind[current_node] != NODE_SEAT and agents.wait_steps[agent_id] < PATIENCE_STEPS:
+    #     can_enter &= distance_gained >= -1e-9
+    if not can_enter.any():
+        return None
     if not can_enter.any():
         return None
 
@@ -217,7 +228,7 @@ def choose_next_edge(grid, agent_id, agents, occupant_at_node, cost_to_target, t
 
     # bigger independence weighs shortest route more and herd term less.
     independence = agents.independence[agent_id]
-    exponent = independence * distance_gained + (HERD_STRENGTH / independence) * herd_pull
+    exponent = 3*independence * distance_gained + 2*(HERD_STRENGTH / independence**2) * herd_pull
 
     weights = np.zeros(len(outgoing_edges))
     weights[can_enter] = np.exp(exponent[can_enter] - exponent[can_enter].max())
@@ -247,7 +258,9 @@ def move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs,
         occupant_at_node[next_node] = agent_id
         agents.current_node[agent_id] = next_node
         agents.movement_budget[agent_id] -= grid.edge_length[chosen_edge]
-        agents.last_move_direction[agent_id] = tables.edge_direction[chosen_edge]    
+        agents.last_move_direction[agent_id] = tables.edge_direction[chosen_edge]
+        if grid.node_kind[next_node] != NODE_SEAT:
+            agents.has_left_seats[agent_id] = True
 
         if cost_to_target[next_node] == 0.0:
             if agents.heading_to_door[agent_id]:
@@ -257,14 +270,15 @@ def move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs,
                 agents.exit_step[agent_id] = step_number
                 occupant_at_node[next_node] = -1
 
-def pick_by_distance(costs, random_generator):
-    reachable = np.isfinite(costs)
-    if not reachable.any():
-        return None
+def pick_by_distance(costs, random_generator, current=None):
+    visible = np.isfinite(costs) & (costs <= VIEW_RANGE)
+    if current is not None and np.isfinite(costs[current]):
+        visible[current] = True            
+    if not visible.any():
+        return None                     
     weights = np.zeros(len(costs))
-    weights[reachable] = np.exp(-TARGET_CHOICE_SHARPNESS * (costs[reachable] - costs[reachable].min()))
+    weights[visible] = np.exp(-TARGET_CHOICE_SHARPNESS * (costs[visible] - costs[visible].min()))
     return random_generator.choice(len(costs), p=weights / weights.sum())
-
 
 def reevaluate_targets(agents, door_costs, exit_costs, reconsidered_exit_rows, random_generator, step_number):
     # Staggered by agent number so crowd reevaluates in batches
@@ -281,6 +295,14 @@ def reevaluate_targets(agents, door_costs, exit_costs, reconsidered_exit_rows, r
             choice = pick_by_distance(exit_costs[reconsidered_exit_rows, node], random_generator)
             if choice is not None:
                 agents.target_exit_row[agent_id] = reconsidered_exit_rows[choice]
+
+def time_to_fraction_out(agents, fraction, step_seconds):
+    needed = int(np.ceil(fraction * agents.num_agents))
+    exit_steps = np.sort(agents.exit_step[agents.has_exited])
+    if len(exit_steps) < needed:
+        return None
+    step = int(exit_steps[needed - 1])
+    return step, step * step_seconds
 
 if __name__ == "__main__":
     grid = Grid.from_model(cell_m=0.5)

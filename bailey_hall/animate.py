@@ -8,6 +8,7 @@ animate.py [run.npz]
 """
 
 from __future__ import annotations
+from matplotlib.animation import PillowWriter
 
 import os
 import sys
@@ -100,8 +101,15 @@ def animate(grid: Grid, run: dict, path: str):
         return agent_dots
 
     animation = FuncAnimation(figure, draw_step, frames=len(node), blit=False)
-    animation.save(path, writer=FFMpegWriter(fps=FPS),
-                   progress_callback=lambda done, total: print(f"\r  frame {done + 1}/{total}", end="", flush=True))
+    # animation.save(path, writer=FFMpegWriter(fps=FPS),
+    #                progress_callback=lambda done, total: print(f"\r  frame {done + 1}/{total}", end="", flush=True))
+    animation.save(
+    path.replace(".mp4", ".gif"),  # Update extension to .gif
+    writer=PillowWriter(fps=FPS),
+    progress_callback=lambda done, total: print(
+        f"\r  frame {done + 1}/{total}", end="", flush=True
+    ),
+)
     print()
     plt.close(figure)
 

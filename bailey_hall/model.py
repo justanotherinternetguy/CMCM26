@@ -140,7 +140,9 @@ class Params:
     loge_door_width: float = 5.0           # ASSUMPTION: pairs of single doors ~ 5 ft clear
     loge_center_door_width: float = 6.0
     loge_side_door_y: Tuple[float, float] = (-13.2, -8.6)   # side doors in the back wall (chart gap)
-    portico_door_angles: Tuple[float, ...] = (-39.5, -55.0, -125.0, -141.0)  # measured on the plan
+    # One side door each way, facing the exterior stairs.  The openings at 55 and 125 deg on the plan
+    # are not exits: Google Maps shows only these two.  The west door is at the west stair's angle.
+    portico_door_angles: Tuple[float, ...] = (-39.5, -149.6)
     portico_door_width: float = 4.0        # ASSUMPTION (gap measured 3.3-4.4 ft)
     foyer_door_xs: Tuple[float, ...] = (-11.2, 0.0, 11.2)
     foyer_door_width: float = 5.0
@@ -407,7 +409,7 @@ class Model:
                                         p.loge_side_door_y[0], p.loge_side_door_y[1]),
                                    p.loge_side_door_y[1] - p.loge_side_door_y[0], "door",
                                    "side door at the end of the loge side aisle"))
-        # corridor -> portico (4 side doors)  (EXIT from the building envelope)
+        # corridor -> portico (2 side doors)  (EXIT from the building envelope)
         for a in p.portico_door_angles:
             self.doors.append(Door(f"portico_door_{int(round(-a))}", lv,
                                    radial_strip(a, p.portico_door_width, p.r_ext_in - p.door_depth_pad,
