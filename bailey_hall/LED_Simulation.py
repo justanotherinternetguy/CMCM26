@@ -17,6 +17,7 @@ RANDOM_SEED = 42067
 MAX_STEPS = 5000
 
 NORTH_STAIR_EXIT_LABELS = ("BW", "BE")
+SIDE_EXIT_LABELS = ("PW", "PE")
 INCLUDE_NORTH_STAIR_COST = True
 
 NUM_DIRECTIONS = 8
@@ -97,7 +98,7 @@ STUDENT_PROFILE = AudienceProfile(
     independence_mean=4.5, independence_std=1.0, independence_min=1.0,
     knows_all_exits=True, has_crowd_managers=False)
 
-PROFILE = STUDENT_PROFILE
+PROFILE = CONCERT_PROFILE
 
 
 @dataclass
@@ -562,7 +563,7 @@ def reevaluate_targets(agents: Agents, door_costs: np.ndarray, door_to_exit_cost
         else:
             rows = all_exit_rows if knows_all else main_entrance_rows
             current_position = np.flatnonzero(rows == agents.target_exit_row[agent_id])
-            current = int(current_position[0]) if (knows_all and current_position.size) else None
+            current = int(current_position[0]) if current_position.size else None
             choice = pick_by_distance(exit_costs[rows, node], random_generator, current=current)
             if choice is not None:
                 agents.target_exit_row[agent_id] = rows[choice]
@@ -617,12 +618,15 @@ if __name__ == "__main__":
     tables = build_movement_tables(grid)
     all_exit_rows = np.arange(len(fields.exit_labels))
     main_entrance_rows = np.array([fields.exit_labels.index(label) for label in MAIN_ENTRANCE_LABELS])
+    side_exit_rows = np.array([fields.exit_labels.index(label) for label in SIDE_EXIT_LABELS
+                            if label in fields.exit_labels], dtype=int)      # skips closed exits
+    uninformed_exit_rows = np.concatenate([main_entrance_rows, side_exit_rows])
 
     time_step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
     frames = []     # one snapshot per step, for animate.py
     for step_number in range(1, MAX_STEPS + 1):
         reevaluate_targets(agents, door_costs, door_to_exit_costs, exit_costs, exit_goal_cost, all_exit_rows,
-                           main_entrance_rows, occupant_at_node, random_generator, step_number)
+                           uninformed_exit_rows, occupant_at_node, random_generator, step_number)
         num_redirected += apply_crowd_managers(agents, managers, door_costs, door_to_exit_costs, exit_costs,
                                                manager_random_generator, time_step_seconds)
         move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs, exit_goal_cost, led,
