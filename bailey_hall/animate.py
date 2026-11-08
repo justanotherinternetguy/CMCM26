@@ -26,14 +26,18 @@ FPS = 30
 WALL_COLOR, FLOOR_COLOR, SEAT_COLOR, EXIT_COLOR, STAIR_COLOR = "#3a3f47", "#ece8df", "#bdb6a8", "#2ca02c", "#eff5c6"
 TO_DOOR_COLOR, TO_EXIT_COLOR = "#1f77b4", "#d1495b"
 MANAGER_COLOR, TOLD_BY_MANAGER_COLOR = "#111111", "#8e44ad"
+CLOSED_EXIT_COLOR = "#ff7f0e"
 
 
 def save_run(path: str, grid: Grid, frames: List[dict], step_seconds: float,
-             manager_nodes: Optional[np.ndarray] = None) -> str:
+             manager_nodes: Optional[np.ndarray] = None,
+             closed_exit_cells: Optional[np.ndarray] = None) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     extra = {}
     if manager_nodes is not None:
         extra["manager_node"] = np.asarray(manager_nodes, np.int32)
+    if closed_exit_cells is not None and np.any(closed_exit_cells):
+            extra["closed_exit_cells"] = np.asarray(closed_exit_cells, bool)
     if frames and all("manager" in frame for frame in frames):
         extra["told_by_manager"] = np.stack([frame["manager"] for frame in frames])
     np.savez_compressed(path, cell_m=grid.cell_m, num_nodes=grid.num_nodes, step_seconds=step_seconds,
@@ -59,6 +63,7 @@ def animate(grid: Grid, run: dict, path: str):
     node, exited, to_door = run["node"], run["exited"], run["to_door"]
     told_by_manager = run.get("told_by_manager")
     manager_nodes = run.get("manager_node", np.empty(0, np.int32))
+    closed_cells = run.get("closed_exit_cells")
     num_agents = node.shape[1]
     step_seconds = float(run["step_seconds"])
     _, num_rows, num_columns = grid.shape
@@ -75,6 +80,10 @@ def animate(grid: Grid, run: dict, path: str):
         
         axis.imshow(stair_cells, extent=extent, interpolation="nearest", cmap=ListedColormap([STAIR_COLOR]))
         axis.imshow(exit_cells, extent=extent, interpolation="nearest", cmap=ListedColormap([EXIT_COLOR]))
+
+        if closed_cells is not None:
+            axis.imshow(np.where(closed_cells[level_index], 1.0, np.nan), extent=extent,
+                        interpolation="nearest", cmap=ListedColormap([CLOSED_EXIT_COLOR]))
         
         on_level = grid.node_level == level_index
         walkway = on_level & (grid.node_kind == NODE_WALKWAY)
@@ -97,6 +106,8 @@ def animate(grid: Grid, run: dict, path: str):
     legend = [Line2D([], [], marker="o", linestyle="", color=TO_DOOR_COLOR, label="going to auditorium door"),
               Line2D([], [], marker="o", linestyle="", color=TO_EXIT_COLOR, label="going to building exit"),
               Line2D([], [], marker="s", linestyle="", color=EXIT_COLOR, label="exit")]
+    if closed_cells is not None:
+        legend.append(Line2D([], [], marker="s", linestyle="", color=CLOSED_EXIT_COLOR, label="closed exit"))
     if len(manager_nodes):
         legend += [Line2D([], [], marker="o", linestyle="", color=TOLD_BY_MANAGER_COLOR,
                           label="redirected by a crowd manager"),
