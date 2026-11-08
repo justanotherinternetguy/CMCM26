@@ -1,9 +1,3 @@
-"""Egress simulation of Bailey Hall with a hand-painted LED layout and barriers.
-
-Each step an agent picks a neighbouring node with probability proportional to exp(exponent), where
-exponent = selfish pull (toward own target) + herd pull + LED pull. On a lit node, the LED pull points
-toward the closest exit from that node.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
