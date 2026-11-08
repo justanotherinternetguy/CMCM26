@@ -122,7 +122,3 @@ door widths, portico extent). Everything is a `Params` field, so change a number
   BW and BE. Close a gate with `grid.distance_field(blocked=grid.exit_mask("F3"))`.
 
 `grid.dist` and `grid.node_dist` are weighted costs, not walking distances or times.
-
-Pitfalls already handled (keep them in mind when editing `Params`): rows that end a few
-centimetres short of a wall leave a hairline strip that a router can send people through;
-spaces must overlap doors by `door_depth_pad`.

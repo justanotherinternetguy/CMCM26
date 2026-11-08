@@ -7,7 +7,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from animate import RUN_PATH, save_run
-from grid import COST_STAIRS, NODE_SEAT, Grid
+from grid import BALCONY, COST_STAIRS, FIRST_FLOOR, NODE_CELL, NODE_SEAT, Grid
 from grid_paint import GridPaint
 from model import FT, Model
 
@@ -33,6 +33,36 @@ LED_ENABLED = True
 LED_STRENGTH = 10.0
 LED_FOLLOW_PROBABILITY = 0.85
 
+# crowd managers (cms) stand at fixed posts. Someone within CROWD_MANAGER_RADIUS_M of a manager
+# may be told to use that manager's exit instead of their own. 
+
+
+# The chance is a rate per second: it is
+# CROWD_MANAGER_MAX_SWITCH_RATE_PER_S right next to the manager and falls linearly to 0 at the radius,
+# so the longer someone stays close (e.g. stuck in a queue), the more likely they are to be redirected.
+CROWD_MANAGER_RADIUS_M = 4.0
+CROWD_MANAGER_MAX_SWITCH_RATE_PER_S = 1.0
+ATTENDEES_PER_CROWD_MANAGER = 250    # NY State Fire Code: at least one manager per 250 attendees
+
+
+@dataclass
+class CrowdManagerPost:
+    name: str
+    level: int # FIRST_FLOOR/BALCONY
+    x_m: float
+    y_m: float
+    target_exit_label: str # target exit that this manager will send everyone tos
+
+# placement of crowd managers
+CROWD_MANAGER_POSTS = (
+    CrowdManagerPost("orchestra front W", FIRST_FLOOR, -8.0, 7.5, "SW"),
+    CrowdManagerPost("orchestra front E", FIRST_FLOOR, 8.0, 7.5, "SE"),
+    CrowdManagerPost("corridor W", FIRST_FLOOR, -17.0, -4.0, "PW"),
+    CrowdManagerPost("corridor E", FIRST_FLOOR, 17.0, -4.0, "PE"),
+    CrowdManagerPost("balcony W", BALCONY, -17.5, -2.0, "BW"),
+    CrowdManagerPost("balcony E", BALCONY, 17.5, -2.0, "BE"),
+)
+
 MAIN_ENTRANCE_LABELS = ("F1", "F2", "F3", "F4", "F5")
 
 KNOWN_AUDITORIUM_DOOR_NAMES = (
@@ -48,23 +78,24 @@ class AudienceProfile:
     speed_fraction_std: float
     speed_fraction_min: float
     speed_fraction_max: float
-    independence_mean: float          # higher = cares more about the shortest route, less about the herd
+    independence_mean: float
     independence_std: float
     independence_min: float
     knows_all_exits: bool = False
+    has_crowd_managers: bool = False
 
 
 CONCERT_PROFILE = AudienceProfile(
     "concert",
     speed_fraction_mean=0.8, speed_fraction_std=0.15, speed_fraction_min=0.3, speed_fraction_max=1.0,
     independence_mean=3.0, independence_std=1.0, independence_min=1.0,
-    knows_all_exits=False)
+    knows_all_exits=False, has_crowd_managers=True)
 
 STUDENT_PROFILE = AudienceProfile(
     "students",
     speed_fraction_mean=0.8, speed_fraction_std=0.15, speed_fraction_min=0.3, speed_fraction_max=1.0,
     independence_mean=4.5, independence_std=1.0, independence_min=1.0,
-    knows_all_exits=True)
+    knows_all_exits=True, has_crowd_managers=False)
 
 PROFILE = STUDENT_PROFILE
 
@@ -178,6 +209,47 @@ def build_led_guidance(grid: Grid, paint: GridPaint, fields: DistanceFields) -> 
 
 
 @dataclass
+class CrowdManagers:
+    names: List[str]
+    node: np.ndarray                # node each manager stands on (they do not block anyone)
+    target_exit_row: np.ndarray
+    target_exit_label: np.ndarray
+    distance_to_manager: np.ndarray
+    radius_m: float
+    max_switch_rate_per_s: float
+
+    @property
+    def num_managers(self) -> int:
+        return len(self.node)
+
+
+def place_crowd_managers(grid: Grid, fields: DistanceFields,
+                         posts: Sequence[CrowdManagerPost]) -> CrowdManagers:
+    posts = [post for post in posts if post.target_exit_label in fields.exit_labels]  # skip closed exits
+    names, nodes, exit_rows, distance_rows = [], [], [], []
+    for post in posts:
+        exit_row = fields.exit_labels.index(post.target_exit_label)
+        candidates = np.flatnonzero((grid.node_kind == NODE_CELL) & (grid.node_level == post.level)
+                                    & ~fields.blocked_nodes & np.isfinite(fields.cost_by_exit[exit_row]))
+        node = int(candidates[np.argmin(np.hypot(grid.node_x[candidates] - post.x_m,
+                                                 grid.node_y[candidates] - post.y_m))])
+        at_manager = np.zeros(grid.num_nodes, bool)
+        at_manager[node] = True
+        blocked = fields.blocked_nodes if fields.blocked_nodes.any() else None
+        distance = grid.node_distance_field(targets=at_manager, blocked=blocked)
+        distance[distance > CROWD_MANAGER_RADIUS_M] = np.inf
+        names.append(post.name)
+        nodes.append(node)
+        exit_rows.append(exit_row)
+        distance_rows.append(distance)
+    distance_to_manager = np.vstack(distance_rows) if distance_rows else np.empty((0, grid.num_nodes))
+    exit_rows = np.array(exit_rows, dtype=int)
+    return CrowdManagers(names, np.array(nodes, dtype=np.int32), exit_rows,
+                         np.array(fields.exit_labels)[exit_rows], distance_to_manager,
+                         CROWD_MANAGER_RADIUS_M, CROWD_MANAGER_MAX_SWITCH_RATE_PER_S)
+
+
+@dataclass
 class Agents:
     seat_index: np.ndarray
     start_node: np.ndarray
@@ -199,6 +271,7 @@ class Agents:
     has_left_seats: np.ndarray
     knows_all_exits: np.ndarray
     follows_led: np.ndarray
+    follows_manager: np.ndarray
 
     @property
     def num_agents(self) -> int:
@@ -266,6 +339,7 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         has_left_seats=np.zeros(num_seats, bool),
         knows_all_exits=np.full(num_seats, profile.knows_all_exits, bool),
         follows_led=follows_led,
+        follows_manager=np.zeros(num_seats, bool),
     )
 
     occupant_at_node = np.full(grid.num_nodes, -1, np.int32)
@@ -407,9 +481,50 @@ def move_agents_one_step(grid: Grid, agents: Agents, occupant_at_node: np.ndarra
             finish_if_at_exit(agents, agent_id, next_node, exit_costs, exit_goal_cost, occupant_at_node, step_number)
 
 
+def send_agent_to_exit(agents: Agents, agent_id: int, exit_row: int, exit_label: str, door_costs: np.ndarray,
+                       door_to_exit_costs: np.ndarray, exit_costs: np.ndarray) -> None:
+    node = agents.current_node[agent_id]
+    agents.target_exit_row[agent_id] = exit_row
+    agents.target_exit_label[agent_id] = exit_label
+    if agents.heading_to_door[agent_id]:
+        cost_via_door = door_costs[:, node] + door_to_exit_costs[:, exit_row]
+        if cost_via_door.min() <= exit_costs[exit_row, node] + 1e-6:
+            agents.target_door_row[agent_id] = int(cost_via_door.argmin())
+            agents.target_door_name[agent_id] = KNOWN_AUDITORIUM_DOOR_NAMES[int(cost_via_door.argmin())]
+        else:
+            agents.heading_to_door[agent_id] = False
+
+
+def apply_crowd_managers(agents: Agents, managers: Optional[CrowdManagers], door_costs: np.ndarray,
+                         door_to_exit_costs: np.ndarray, exit_costs: np.ndarray,
+                         random_generator: np.random.Generator, step_seconds: float) -> int:
+    if managers is None or managers.num_managers == 0:
+        return 0
+    inside = np.flatnonzero(~agents.has_exited)
+    nodes = agents.current_node[inside]
+    distance = managers.distance_to_manager[:, nodes]
+    nearest = distance.argmin(axis=0)
+    distance_to_nearest = distance[nearest, np.arange(len(inside))]
+    new_exit_rows = managers.target_exit_row[nearest]
+
+    in_range = np.isfinite(distance_to_nearest) & np.isfinite(exit_costs[new_exit_rows, nodes])
+    closeness = np.where(in_range, 1.0 - distance_to_nearest / managers.radius_m, 0.0)
+    switch_probability = 1.0 - np.exp(-managers.max_switch_rate_per_s * closeness * step_seconds)
+    told = in_range & (random_generator.random(len(inside)) < switch_probability)
+
+    num_switched = 0
+    for position in np.flatnonzero(told):
+        agent_id, exit_row = inside[position], new_exit_rows[position]
+        agents.follows_manager[agent_id] = True
+        if agents.target_exit_row[agent_id] != exit_row:
+            num_switched += 1
+        send_agent_to_exit(agents, agent_id, exit_row, managers.target_exit_label[nearest[position]],
+                           door_costs, door_to_exit_costs, exit_costs)
+    return num_switched
+
+
 def pick_by_distance(costs: np.ndarray, random_generator: np.random.Generator, current: Optional[int] = None,
                      visible_costs: Optional[np.ndarray] = None) -> Optional[int]:
-    """Pick an index with probability falling off with `costs`, among options within VIEW_RANGE_M."""
     if visible_costs is None:
         visible_costs = costs
     visible = np.isfinite(costs) & (visible_costs <= VIEW_RANGE_M)
@@ -426,13 +541,13 @@ def reevaluate_targets(agents: Agents, door_costs: np.ndarray, door_to_exit_cost
                        exit_costs: np.ndarray, exit_goal_cost: np.ndarray, all_exit_rows: np.ndarray,
                        main_entrance_rows: np.ndarray, occupant_at_node: np.ndarray,
                        random_generator: np.random.Generator, step_number: int) -> None:
-    # Staggered by agent number so the crowd reevaluates in batches.
     is_due = ~agents.has_exited & ((step_number + np.arange(agents.num_agents)) % REEVALUATE_EVERY_STEPS == 0)
     for agent_id in np.nonzero(is_due)[0]:
         node = agents.current_node[agent_id]
         knows_all = agents.knows_all_exits[agent_id]
+        told_by_manager = agents.follows_manager[agent_id]
         if agents.heading_to_door[agent_id]:
-            if knows_all:
+            if knows_all or told_by_manager:
                 cost_via_door = door_costs[:, node] + door_to_exit_costs[:, agents.target_exit_row[agent_id]]
                 choice = pick_by_distance(cost_via_door, random_generator, visible_costs=door_costs[:, node])
             else:
@@ -442,6 +557,8 @@ def reevaluate_targets(agents: Agents, door_costs: np.ndarray, door_to_exit_cost
                 if door_costs[choice, node] == 0.0:          # already standing in the door
                     agents.heading_to_door[agent_id] = False
                     finish_if_at_exit(agents, agent_id, node, exit_costs, exit_goal_cost, occupant_at_node, step_number)
+        elif told_by_manager:
+            continue                                        # keep the exit the manager gave
         else:
             rows = all_exit_rows if knows_all else main_entrance_rows
             current_position = np.flatnonzero(rows == agents.target_exit_row[agent_id])
@@ -488,25 +605,40 @@ if __name__ == "__main__":
         print(f"{title}:", dict(zip(names.tolist(), counts.tolist())))
     print("start without a door stage:", int((~agents.heading_to_door).sum()))
 
+    managers = place_crowd_managers(grid, fields, CROWD_MANAGER_POSTS) if PROFILE.has_crowd_managers else None
+    if managers is not None:
+        required = int(np.ceil(agents.num_agents / ATTENDEES_PER_CROWD_MANAGER))
+        print(f"crowd managers: {managers.num_managers} (law requires at least {required})")
+        for name, node, label in zip(managers.names, managers.node, managers.target_exit_label):
+            print(f"  {name:20s} at ({grid.node_x[node]:6.1f}, {grid.node_y[node]:6.1f}) m -> {label}")
+    manager_random_generator = np.random.default_rng(np.random.SeedSequence([RANDOM_SEED, 2]))
+    num_redirected = 0
+
     tables = build_movement_tables(grid)
     all_exit_rows = np.arange(len(fields.exit_labels))
     main_entrance_rows = np.array([fields.exit_labels.index(label) for label in MAIN_ENTRANCE_LABELS])
 
+    time_step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
     frames = []     # one snapshot per step, for animate.py
     for step_number in range(1, MAX_STEPS + 1):
         reevaluate_targets(agents, door_costs, door_to_exit_costs, exit_costs, exit_goal_cost, all_exit_rows,
                            main_entrance_rows, occupant_at_node, random_generator, step_number)
+        num_redirected += apply_crowd_managers(agents, managers, door_costs, door_to_exit_costs, exit_costs,
+                                               manager_random_generator, time_step_seconds)
         move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs, exit_goal_cost, led,
                              tables, random_generator, step_number)
         frames.append(dict(
             node=agents.current_node.copy(),
             exited=agents.has_exited.copy(),
             to_door=agents.heading_to_door.copy(),
+            manager=agents.follows_manager.copy(),
         ))
         if agents.has_exited.all():
             break
 
-    time_step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
+    if managers is not None:
+        print(f"told by a crowd manager: {int(agents.follows_manager.sum())} of {agents.num_agents} "
+              f"({num_redirected} exit changes)")
     exit_names = np.array(fields.exit_labels)[agents.target_exit_row[agents.has_exited]]
     names, counts = np.unique(exit_names, return_counts=True)
     print("exit used:", dict(zip(names.tolist(), counts.tolist())))
@@ -515,4 +647,5 @@ if __name__ == "__main__":
     ninety_percent = time_to_fraction_out(agents, 0.9, time_step_seconds)
     if ninety_percent is not None:
         print(f"90% out by {ninety_percent[1]:.0f} s")
-    print("frames saved to", save_run(RUN_PATH, grid, frames, time_step_seconds))
+    manager_nodes = managers.node if managers is not None else None
+    print("frames saved to", save_run(RUN_PATH, grid, frames, time_step_seconds, manager_nodes=manager_nodes))

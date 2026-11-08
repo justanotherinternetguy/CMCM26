@@ -12,7 +12,7 @@ from matplotlib.animation import PillowWriter
 
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -25,14 +25,21 @@ FPS = 30
 
 WALL_COLOR, FLOOR_COLOR, SEAT_COLOR, EXIT_COLOR, STAIR_COLOR = "#3a3f47", "#ece8df", "#bdb6a8", "#2ca02c", "#eff5c6"
 TO_DOOR_COLOR, TO_EXIT_COLOR = "#1f77b4", "#d1495b"
+MANAGER_COLOR, TOLD_BY_MANAGER_COLOR = "#111111", "#8e44ad"
 
 
-def save_run(path: str, grid: Grid, frames: List[dict], step_seconds: float) -> str:
+def save_run(path: str, grid: Grid, frames: List[dict], step_seconds: float,
+             manager_nodes: Optional[np.ndarray] = None) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    extra = {}
+    if manager_nodes is not None:
+        extra["manager_node"] = np.asarray(manager_nodes, np.int32)
+    if frames and all("manager" in frame for frame in frames):
+        extra["told_by_manager"] = np.stack([frame["manager"] for frame in frames])
     np.savez_compressed(path, cell_m=grid.cell_m, num_nodes=grid.num_nodes, step_seconds=step_seconds,
                         node=np.stack([frame["node"] for frame in frames]).astype(np.int32),
                         exited=np.stack([frame["exited"] for frame in frames]),
-                        to_door=np.stack([frame["to_door"] for frame in frames]))
+                        to_door=np.stack([frame["to_door"] for frame in frames]), **extra)
     return path
 
 
@@ -50,6 +57,8 @@ def animate(grid: Grid, run: dict, path: str):
     from matplotlib.lines import Line2D
 
     node, exited, to_door = run["node"], run["exited"], run["to_door"]
+    told_by_manager = run.get("told_by_manager")
+    manager_nodes = run.get("manager_node", np.empty(0, np.int32))
     num_agents = node.shape[1]
     step_seconds = float(run["step_seconds"])
     _, num_rows, num_columns = grid.shape
@@ -74,6 +83,9 @@ def animate(grid: Grid, run: dict, path: str):
         axis.scatter(grid.node_x[walkway], grid.node_y[walkway], c=FLOOR_COLOR, s=9, marker="s", linewidths=0)
         axis.scatter(grid.node_x[seat], grid.node_y[seat], c=SEAT_COLOR, s=7, marker="s", linewidths=0)
         agent_dots.append(axis.scatter([], [], s=18, linewidths=0, zorder=3))
+        here = manager_nodes[grid.node_level[manager_nodes] == level_index]
+        axis.scatter(grid.node_x[here], grid.node_y[here], c=MANAGER_COLOR, s=90, marker="*",
+                     edgecolors="white", linewidths=0.6, zorder=4)
         axis.set_title(LEVEL_NAMES[level_index].replace("_", " "), fontsize=11)
         axis.set_xlabel("x east [m]")
         axis.set_ylabel("y north [m]")
@@ -85,12 +97,19 @@ def animate(grid: Grid, run: dict, path: str):
     legend = [Line2D([], [], marker="o", linestyle="", color=TO_DOOR_COLOR, label="going to auditorium door"),
               Line2D([], [], marker="o", linestyle="", color=TO_EXIT_COLOR, label="going to building exit"),
               Line2D([], [], marker="s", linestyle="", color=EXIT_COLOR, label="exit")]
-    figure.legend(handles=legend, loc="outside lower center", ncol=3, frameon=False, fontsize=10)
+    if len(manager_nodes):
+        legend += [Line2D([], [], marker="o", linestyle="", color=TOLD_BY_MANAGER_COLOR,
+                          label="redirected by a crowd manager"),
+                   Line2D([], [], marker="*", linestyle="", color=MANAGER_COLOR, markersize=10,
+                          label="crowd manager")]
+    figure.legend(handles=legend, loc="outside lower center", ncol=len(legend), frameon=False, fontsize=10)
     clock = figure.suptitle("", fontsize=13)
 
     def draw_step(step_index):
         nodes_now, inside = node[step_index], ~exited[step_index]
         colors = np.where(to_door[step_index], TO_DOOR_COLOR, TO_EXIT_COLOR)
+        if told_by_manager is not None:
+            colors = np.where(told_by_manager[step_index], TOLD_BY_MANAGER_COLOR, colors)
         node_levels = grid.node_level[nodes_now]
         for level_index, dots in ((FIRST_FLOOR, agent_dots[0]), (BALCONY, agent_dots[1])):
             shown = inside & (node_levels == level_index)
