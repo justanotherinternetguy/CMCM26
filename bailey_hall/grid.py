@@ -48,14 +48,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT_VERSION = 2
 
 FIRST_FLOOR, BALCONY = 0, 1
+STAIR_INTERIOR = 2  # virtual level for stair-chain nodes, not a third building floor
 LEVEL_NAMES = ("first_floor", "balcony")
 
 COST_FLOOR = 1.0        # also doors, exits and walkway nodes
 COST_STAIRS = 2.0
 COST_SEAT = 2.5
+STAIR_NODE_SPACING_M = 0.75  # spacing along each of two stair lanes
 
-NODE_CELL, NODE_SEAT, NODE_WALKWAY = 0, 1, 2
-NODE_KIND_NAMES = ("cell", "seat", "walkway")
+NODE_CELL, NODE_SEAT, NODE_WALKWAY, NODE_STAIR = range(4)
+NODE_KIND_NAMES = ("cell", "seat", "walkway", "stair")
 
 EDGE_LATTICE, EDGE_SEAT_SEAT, EDGE_SEAT_WALKWAY, EDGE_WALKWAY_WALKWAY, EDGE_ROW_LINK, EDGE_STAIR = range(6)
 EDGE_KIND_NAMES = ("lattice", "seat_seat", "seat_walkway", "walkway_walkway", "row_link", "stair")
@@ -67,8 +69,8 @@ EXIT_DOORS: Dict[str, Tuple[int, Tuple[str, ...]]] = {
     "F3": (FIRST_FLOOR, ("front_door_+0",)),
     "F4": (FIRST_FLOOR, ("front_door_+10",)),
     "F5": (FIRST_FLOOR, ("front_door_+20",)),
-    "PW": (FIRST_FLOOR, ("portico_door_150",)),
-    "PE": (FIRST_FLOOR, ("portico_door_40",)),
+    "PW": (FIRST_FLOOR, ("portico_door_125", "portico_door_141")),
+    "PE": (FIRST_FLOOR, ("portico_door_40", "portico_door_55")),
     "SW": (FIRST_FLOOR, ("exit_W_room132",)),
     "SE": (FIRST_FLOOR, ("exit_E_room132",)),
     "BW": (BALCONY, ("balcony_exit_NW",)),
@@ -406,16 +408,51 @@ class Grid:
                 if link is not None:
                     add_two_way(walkway_nodes[end_seat], link[0], EDGE_ROW_LINK, link[1])
 
+        # Model each main balcony staircase as two one-way chains, instead of
+        # one long edge. Agents occupy individual stair nodes and free the
+        # preceding node as they move; no special transit state is needed.
         first_floor_cells = np.nonzero(cell_levels == FIRST_FLOOR)[0]
+        stair_x, stair_y = [], []
         for stair in building.stairs:
             if stair.name not in STAIR_HEAD_DOORS:
                 continue
             head_door = door_names.index(STAIR_HEAD_DOORS[stair.name])
             head_cells = cell_node[BALCONY][door_id[BALCONY] == head_door]
+            if not len(head_cells):
+                raise ValueError(f"No balcony entrance cells for {stair.name}")
             landing_x, landing_y = stair.p_to[0] * FT, stair.p_to[1] * FT
-            nearest = np.argmin(np.hypot(node_x[first_floor_cells] - landing_x, node_y[first_floor_cells] - landing_y))
-            landing_cells = np.full(len(head_cells), first_floor_cells[nearest], np.int32)
-            add_edges(head_cells, landing_cells, EDGE_STAIR, stair.length * FT)
+            landing_dist = np.hypot(node_x[first_floor_cells] - landing_x,
+                                    node_y[first_floor_cells] - landing_y)
+            # Two separate landing cells represent the two lanes.
+            landings = first_floor_cells[np.argsort(landing_dist)[:2]]
+            if len(landings) != 2:
+                raise ValueError(f"Not enough landing cells for {stair.name}")
+
+            head_center = np.array([node_x[head_cells].mean(), node_y[head_cells].mean()])
+            num_segments = max(2, math.ceil(stair.length * FT / STAIR_NODE_SPACING_M))
+            segment_length = stair.length * FT / num_segments
+            for landing_node in landings:
+                landing_point = np.array([node_x[landing_node], node_y[landing_node]])
+                chain = []
+                for segment in range(1, num_segments):
+                    fraction = segment / num_segments
+                    point = (1 - fraction) * head_center + fraction * landing_point
+                    chain.append(len(node_kind) + len(stair_x))
+                    stair_x.append(point[0])
+                    stair_y.append(point[1])
+                add_edges(head_cells, np.full(len(head_cells), chain[0], np.int32),
+                          EDGE_STAIR, segment_length)
+                if len(chain) > 1:
+                    add_edges(chain[:-1], chain[1:], EDGE_STAIR, segment_length)
+                add_edges(chain[-1], int(landing_node), EDGE_STAIR, segment_length)
+
+        if stair_x:
+            n_stair = len(stair_x)
+            node_kind = np.concatenate([node_kind, np.full(n_stair, NODE_STAIR, np.int8)])
+            node_level = np.concatenate([node_level, np.full(n_stair, STAIR_INTERIOR, np.int8)])
+            node_x = np.concatenate([node_x, np.asarray(stair_x)])
+            node_y = np.concatenate([node_y, np.asarray(stair_y)])
+            node_cost = np.concatenate([node_cost, np.full(n_stair, COST_STAIRS)])
 
         edge_from = np.concatenate(starts).astype(np.int32)
         edge_to = np.concatenate(stops).astype(np.int32)
@@ -738,9 +775,12 @@ def validate(grid: Grid) -> List[str]:
                            grid.edge_length[not_stairs] * grid.node_cost[grid.edge_to[not_stairs]])),
           "edge cost = length x entry cost of the destination")
     stairs = ~not_stairs
-    check(bool((grid.node_level[grid.edge_from[stairs]] == BALCONY).all()
-               and (grid.node_level[grid.edge_to[stairs]] == FIRST_FLOOR).all()),
-          f"{int(stairs.sum())} stair links, all one-way down (cost {grid.edge_cost[stairs].max():.2f})")
+    stair_from = grid.node_level[grid.edge_from[stairs]]
+    stair_to = grid.node_level[grid.edge_to[stairs]]
+    check(bool(np.isin(stair_from, [BALCONY, STAIR_INTERIOR]).all()
+               and np.isin(stair_to, [STAIR_INTERIOR, FIRST_FLOOR]).all()
+               and np.allclose(grid.edge_cost[stairs], grid.edge_length[stairs] * COST_STAIRS)),
+          f"{int(stairs.sum())} one-way stair-chain links (cost {grid.edge_cost[stairs].max():.2f})")
     crossing = grid.node_level[grid.edge_from] != grid.node_level[grid.edge_to]
     check(bool((grid.edge_kind[crossing] == EDGE_STAIR).all()), "only stair links change level")
 
@@ -754,13 +794,14 @@ def validate(grid: Grid) -> List[str]:
     reachable = np.isfinite(grid.node_dist)
     unreachable = np.nonzero(~reachable)[0]
     for kind, name in enumerate(NODE_KIND_NAMES):
-        for level, level_name in enumerate(LEVEL_NAMES):
+        for level, level_name in enumerate((*LEVEL_NAMES, "stair_intermediate")):
             chosen = (grid.node_kind == kind) & (grid.node_level == level)
             print(f"       {name:8s} {level_name:12s}{int(chosen.sum()):6d} nodes, "
                   f"{int((chosen & ~reachable).sum())} unreachable")
     check(len(unreachable) == 0, f"{grid.num_nodes - len(unreachable)} of {grid.num_nodes} nodes reach an exit")
     for node in unreachable[:20].tolist():
-        print(f"       unreachable: {NODE_KIND_NAMES[grid.node_kind[node]]} on {LEVEL_NAMES[grid.node_level[node]]} "
+        level_name = (*LEVEL_NAMES, "stair_intermediate")[int(grid.node_level[node])]
+        print(f"       unreachable: {NODE_KIND_NAMES[grid.node_kind[node]]} on {level_name} "
               f"at ({grid.node_x[node]:.2f}, {grid.node_y[node]:.2f}) m")
     seat_costs = grid.node_dist[grid.spawn]
     print(f"       seat cost to the nearest exit: median {np.median(seat_costs):.1f}, worst {seat_costs.max():.1f}")
