@@ -32,7 +32,10 @@ BARRIERS_ENABLED = True
 
 LED_ENABLED = True
 LED_STRENGTH = 10.0
-LED_FOLLOW_PROBABILITY = 0.85
+LED_TRUST_DECAY = 0.08    # trust = exp(-decay * (independence - 1))
+LED_RELAX_WEIGHT = 0.5
+LED_VIEW_SCALE_M = 4.0    
+LED_MAX_RANGE_M = 15.0    
 
 # crowd managers (cms) stand at fixed posts. Someone within CROWD_MANAGER_RADIUS_M of a manager
 # may be told to use that manager's exit instead of their own. 
@@ -167,9 +170,9 @@ def compute_exit_goal_costs(exit_costs: np.ndarray) -> np.ndarray:
 class LedGuidance:
     enabled: bool
     strength: float
-    follow_probability: float
     lit_nodes: np.ndarray             # True for every node touched by a painted LED
     cost_to_nearest_exit: np.ndarray  # what the strips point down: cost to the closest exit from each node
+    visibility: np.ndarray
 
 
 def painted_value_at(painted: np.ndarray, level_index: np.ndarray, row: np.ndarray, col: np.ndarray) -> np.ndarray:
@@ -203,11 +206,18 @@ def node_is_lit(paint: GridPaint, grid: Grid) -> np.ndarray:
 
 def build_led_guidance(grid: Grid, paint: GridPaint, fields: DistanceFields) -> LedGuidance:
     if not LED_ENABLED:
-        return LedGuidance(False, LED_STRENGTH, LED_FOLLOW_PROBABILITY,
-                           np.zeros(grid.num_nodes, bool), fields.best_cost)
+        return LedGuidance(False, LED_STRENGTH, np.zeros(grid.num_nodes, bool), fields.best_cost,
+                           np.zeros(grid.num_nodes))
     lit_nodes = node_is_lit(paint, grid) & ~fields.blocked_nodes
-    return LedGuidance(True, LED_STRENGTH, LED_FOLLOW_PROBABILITY, lit_nodes, fields.best_cost)
-
+    blocked_or_none = fields.blocked_nodes if fields.blocked_nodes.any() else None
+    if lit_nodes.any():
+        distance_to_lit = grid.node_distance_field(targets=lit_nodes, blocked=blocked_or_none)
+    else:
+        distance_to_lit = np.full(grid.num_nodes, np.inf)
+    visibility = np.where(distance_to_lit <= LED_MAX_RANGE_M,
+                          np.exp(-distance_to_lit / LED_VIEW_SCALE_M), 0.0)
+    # enabled branch
+    return LedGuidance(True, LED_STRENGTH, lit_nodes, fields.best_cost, visibility)
 
 @dataclass
 class CrowdManagers:
@@ -271,7 +281,8 @@ class Agents:
     last_move_direction: np.ndarray     # -1 if it has not moved
     has_left_seats: np.ndarray
     knows_all_exits: np.ndarray
-    follows_led: np.ndarray
+    led_trust: np.ndarray              
+    led_guided: np.ndarray             
     follows_manager: np.ndarray
 
     @property
@@ -317,8 +328,7 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         target_exit_row = np.array(entrance_rows)[cheapest_entrance_position]
         heading_to_door = np.ones(num_seats, bool)
 
-    # Drawn even when LEDs are off so runs with and without LEDs start from the same audience.
-    follows_led = led.enabled & (random_generator.random(num_seats) < led.follow_probability)
+    led_trust = np.clip(np.exp(-LED_TRUST_DECAY * (independence - 1.0)), 0.0, 1.0)
 
     agents = Agents(
         seat_index=seat_indices,
@@ -339,7 +349,8 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         last_move_direction=np.full(num_seats, -1, np.int8),
         has_left_seats=np.zeros(num_seats, bool),
         knows_all_exits=np.full(num_seats, profile.knows_all_exits, bool),
-        follows_led=follows_led,
+        led_trust=led_trust,
+        led_guided=np.zeros(num_seats, bool),
         follows_manager=np.zeros(num_seats, bool),
     )
 
@@ -410,10 +421,11 @@ def choose_next_edge(grid: Grid, agent_id: int, agents: Agents, occupant_at_node
     herd_pull = share_by_direction[tables.edge_direction[outgoing_edges]]
 
     led_pull = np.zeros(len(outgoing_edges))
-    if (agents.follows_led[agent_id] and led.lit_nodes[current_node]
-            and np.isfinite(led.cost_to_nearest_exit[current_node])):
+    led_weight = led.visibility[current_node] * agents.led_trust[agent_id]
+    if led_weight > 0.0 and np.isfinite(led.cost_to_nearest_exit[current_node]):
         led_distance_gained = led.cost_to_nearest_exit[current_node] - led.cost_to_nearest_exit[neighbor_nodes]
-        led_pull = led.strength * np.where(np.isfinite(led_distance_gained), led_distance_gained, 0.0)
+        led_pull = (led_weight * led.strength
+                    * np.where(np.isfinite(led_distance_gained), led_distance_gained, 0.0))
 
     independence = agents.independence[agent_id]
     selfish_pull = 3 * independence * distance_gained
@@ -427,8 +439,7 @@ def choose_next_edge(grid: Grid, agent_id: int, agents: Agents, occupant_at_node
 
 def finish_if_at_exit(agents: Agents, agent_id: int, node: int, exit_costs: np.ndarray,
                       exit_goal_cost: np.ndarray, occupant_at_node: np.ndarray, step_number: int) -> bool:
-    """People following the LEDs are out at any exit; everyone else only at their target exit."""
-    if agents.follows_led[agent_id]:
+    if agents.led_guided[agent_id]:
         candidate_rows = range(exit_costs.shape[0])
     else:
         candidate_rows = [agents.target_exit_row[agent_id]]
@@ -471,9 +482,11 @@ def move_agents_one_step(grid: Grid, agents: Agents, occupant_at_node: np.ndarra
         if grid.node_kind[next_node] != NODE_SEAT:
             agents.has_left_seats[agent_id] = True
 
-        # People following the LEDs have left the auditorium at any door, not only their own.
+        # Guided agents can leave the auditorium at any door, not only their own.
         reached_door = door_costs[agents.target_door_row[agent_id], next_node] == 0.0
-        if agents.follows_led[agent_id]:
+        agents.led_guided[agent_id] = (led.visibility[next_node] * agents.led_trust[agent_id]
+                                       >= LED_RELAX_WEIGHT)
+        if agents.led_guided[agent_id]:
             reached_door = reached_door or door_costs[:, next_node].min() == 0.0
         if agents.heading_to_door[agent_id] and reached_door:
             agents.heading_to_door[agent_id] = False
@@ -599,7 +612,6 @@ if __name__ == "__main__":
                                             door_costs, door_to_exit_costs, led)
 
     print(f"profile: {PROFILE.name} (mean independence {agents.independence.mean():.2f})")
-    print(f"people following the LEDs: {int(agents.follows_led.sum())} of {agents.num_agents}")
     for title, values in (("initial target doors", agents.target_door_name),
                           ("initial target exits", agents.target_exit_label)):
         names, counts = np.unique(values, return_counts=True)
