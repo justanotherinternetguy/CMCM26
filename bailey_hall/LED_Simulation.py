@@ -16,6 +16,14 @@ MAX_WALKING_SPEED_M_PER_S = 1.4
 RANDOM_SEED = 42067
 MAX_STEPS = 5000
 
+# Alarm-to-first-movement delay, including immediate seat-neighbor influence.
+RESPONSE_TIME_ENABLED = True
+RESPONSE_LOG_MEAN = 3.93
+RESPONSE_LOG_STD = 0.44
+RESPONSE_SHUFFLE_FRACTION = 0.20
+SOCIAL_RESPONSE_ENABLED = True
+SOCIAL_REACTION_DELAY_S = 5.0
+
 NORTH_STAIR_EXIT_LABELS = ("BW", "BE")
 SIDE_EXIT_LABELS = ("PW", "PE")
 INCLUDE_NORTH_STAIR_COST = True
@@ -30,20 +38,20 @@ VIEW_RANGE_M = 15.0
 PAINT_PATH = f"out/grid_paint_{CELL_M:g}m.npz"
 BARRIERS_ENABLED = True
 
-CLOSED_EXIT_LABELS = ("F2", "F3")      
+CLOSED_EXIT_LABELS = ("F2", "F3")
 DISCOVERY_RADIUS_M = 4.0          #distance at which an agent notices a closed exit
-LED_KNOWS_CLOSURES = False  
+LED_KNOWS_CLOSURES = False
 
 LED_ENABLED = True
 LED_STRENGTH = 10.0
 LED_TRUST_DECAY = 0.08    # trust = exp(-decay * (independence - 1))
 LED_RELAX_WEIGHT = 0.5
-LED_VIEW_SCALE_M = 4.0    
-LED_MAX_RANGE_M = 15.0    
+LED_VIEW_SCALE_M = 4.0
+LED_MAX_RANGE_M = 15.0
 LED_INDEPENDENCE_GAIN = 1.7     # LED independence is multiplied by this for every closed exit the agent has noticed
 
 # crowd managers (cms) stand at fixed posts. Someone within CROWD_MANAGER_RADIUS_M of a manager
-# may be told to use that manager's exit instead of their own. 
+# may be told to use that manager's exit instead of their own.
 
 
 # The chance is a rate per second: it is
@@ -296,6 +304,99 @@ def place_crowd_managers(grid: Grid, fields: DistanceFields,
                          CROWD_MANAGER_RADIUS_M, CROWD_MANAGER_MAX_SWITCH_RATE_PER_S)
 
 
+def assign_response_times(grid: Grid, rng: np.random.Generator) -> np.ndarray:
+    """Assign seat-dependent response times using the paper's specified procedure.
+
+    1. Independently draw N lognormal times (seconds).
+    2. Order seats by (number of seats to aisle, number of rows to exit aisle),
+       breaking ties randomly; give smaller sampled times to earlier seats.
+    3. Shuffle the allocated times among a uniformly chosen 20% of occupants.
+
+    For most seating sections, both ends of the section's row sequence are
+    treated as adjacent to exit aisles. The two uppermost side-box sections
+    on the first floor are exceptions: they have an aisle only below them,
+    so their row distance increases from bottom to top.
+    """
+    n = len(grid.spawn)
+    sampled = rng.lognormal(RESPONSE_LOG_MEAN, RESPONSE_LOG_STD, n)
+    row_id_by_seat = np.asarray(grid.seat_row)
+    seat_number = np.asarray(grid.seat_number)
+    aisle_distance = np.zeros(n, dtype=np.int32)
+    row_distance = np.zeros(n, dtype=np.int32)
+
+    # Seats in the same (section, row) block are numbered along the row.
+    # The first and last occupied seats are taken as adjacent to side aisles.
+    for row_id in np.unique(row_id_by_seat):
+        ids = np.flatnonzero(row_id_by_seat == row_id)
+        ids = ids[np.argsort(seat_number[ids], kind="stable")]
+        positions = np.arange(len(ids))
+        aisle_distance[ids] = np.minimum(positions, len(ids) - 1 - positions)
+
+    # The sequence of rows within each section is defined by grid.row_names.
+    section_rows = {}
+    for row_id, row_name in enumerate(grid.row_names):
+        section = row_name.rsplit("/", 1)[0]
+        section_rows.setdefault(section, []).append(row_id)
+    for section, rows in section_rows.items():
+        for position, row_id in enumerate(rows):
+            row_distance[row_id_by_seat == row_id] = min(position, len(rows) - 1 - position)
+
+    # The two uppermost side-box blocks have just ONE exit aisle, below them
+    # (around y=5 m in the plotted first-floor geometry). For these seats,
+    # rank rows from the bottom aisle upward rather than from either end.
+    # Use actual seat coordinates so this works without relying on section names.
+    seat_nodes = np.asarray(grid.spawn, dtype=np.int32)
+    seat_x = np.asarray(grid.node_x)[seat_nodes]
+    seat_y = np.asarray(grid.node_y)[seat_nodes]
+    first_floor_seat = np.asarray(grid.node_level)[seat_nodes] == 0
+    top_side_box = first_floor_seat & (np.abs(seat_x) > 10.0) & (seat_y > 5.0)
+
+    for on_side in (seat_x < 0, seat_x > 0):
+        box_seats = np.flatnonzero(top_side_box & on_side)
+        if not len(box_seats):
+            continue
+        box_rows = np.unique(row_id_by_seat[box_seats])
+        # Smaller y is closer to the only exit aisle, at the bottom.
+        bottom_to_top = sorted(
+            box_rows,
+            key=lambda row_id: float(
+                seat_y[box_seats[row_id_by_seat[box_seats] == row_id]].mean()
+            ),
+        )
+        for distance, row_id in enumerate(bottom_to_top):
+            same_row = box_seats[row_id_by_seat[box_seats] == row_id]
+            row_distance[same_row] = distance
+
+    random_tiebreakers = rng.random(n)
+    seat_order = np.lexsort((random_tiebreakers, row_distance, aisle_distance))
+    initially_assigned = np.empty(n, dtype=float)
+    initially_assigned[seat_order] = np.sort(sampled)
+
+    count = int(round(RESPONSE_SHUFFLE_FRACTION * n))
+    chosen = rng.choice(n, size=count, replace=False)
+    response_times = initially_assigned.copy()
+    response_times[chosen] = initially_assigned[rng.permutation(chosen)]
+    return response_times
+
+
+def immediate_seat_neighbors(grid: Grid) -> np.ndarray:
+    """For each pedestrian, return the IDs in the adjacent seats (or -1).
+
+    Use the section/row identifiers and seat ordering already provided by
+    grid.py. Neighbors never span different rows or seating sections.
+    """
+    n = len(grid.spawn)
+    neighbors = np.full((n, 2), -1, dtype=np.int32)
+    row_ids = np.asarray(grid.seat_row)
+    seat_numbers = np.asarray(grid.seat_number)
+    for row_id in np.unique(row_ids):
+        occupants = np.flatnonzero(row_ids == row_id)
+        occupants = occupants[np.argsort(seat_numbers[occupants], kind="stable")]
+        neighbors[occupants[1:], 0] = occupants[:-1]   # left neighbor
+        neighbors[occupants[:-1], 1] = occupants[1:]   # right neighbor
+    return neighbors
+
+
 @dataclass
 class Agents:
     seat_index: np.ndarray
@@ -303,6 +404,8 @@ class Agents:
     current_node: np.ndarray
     section: List[str]
     speed_fraction: np.ndarray
+    response_time: np.ndarray
+    has_started_moving: np.ndarray
     target_door_name: np.ndarray        # door out of the auditorium
     target_exit_label: np.ndarray       # exit out of Bailey Hall
     knows_closed: np.ndarray            # (num_agents, num_exits) agent has noticed this exit is closed
@@ -318,8 +421,8 @@ class Agents:
     last_move_direction: np.ndarray     # -1 if it has not moved
     has_left_seats: np.ndarray
     knows_all_exits: np.ndarray
-    led_trust: np.ndarray              
-    led_guided: np.ndarray             
+    led_trust: np.ndarray
+    led_guided: np.ndarray
     follows_manager: np.ndarray
 
     @property
@@ -373,6 +476,8 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         current_node=start_nodes.copy(),
         section=list(grid.seat_section),
         speed_fraction=speed_fractions,
+        response_time=np.zeros(num_seats, dtype=float),
+        has_started_moving=np.zeros(num_seats, dtype=bool),
         target_door_name=target_door_name,
         target_exit_label=target_exit_label,
         knows_closed=np.zeros((num_seats, len(fields.exit_labels)), bool),
@@ -498,11 +603,13 @@ def finish_if_at_exit(agents: Agents, agent_id: int, node: int, exit_costs: np.n
 def move_agents_one_step(grid: Grid, agents: Agents, occupant_at_node: np.ndarray, door_costs: np.ndarray,
                          exit_costs: np.ndarray, exit_goal_cost: np.ndarray, led: LedGuidance,
                          tables: MovementTables, random_generator: np.random.Generator,
-                         step_number: int) -> None:
-    agents.movement_budget += agents.speed_fraction * grid.cell_m
+                         step_number: int, seat_neighbors: np.ndarray) -> None:
+    step_seconds = grid.cell_m / MAX_WALKING_SPEED_M_PER_S
+    ready = (~agents.has_exited) & (step_number * step_seconds >= agents.response_time)
+    agents.movement_budget[ready] += agents.speed_fraction[ready] * grid.cell_m
 
     for agent_id in random_generator.permutation(agents.num_agents):
-        if agents.has_exited[agent_id]:
+        if not ready[agent_id]:
             continue
 
         if agents.heading_to_door[agent_id]:
@@ -523,6 +630,16 @@ def move_agents_one_step(grid: Grid, agents: Agents, occupant_at_node: np.ndarra
         agents.last_move_direction[agent_id] = tables.edge_direction[chosen_edge]
         if grid.node_kind[next_node] != NODE_SEAT:
             agents.has_left_seats[agent_id] = True
+
+        # A neighboring pedestrian's first actual move may shorten response delay.
+        if not agents.has_started_moving[agent_id]:
+            agents.has_started_moving[agent_id] = True
+            if RESPONSE_TIME_ENABLED and SOCIAL_RESPONSE_ENABLED:
+                for neighbor_id in seat_neighbors[agent_id]:
+                    if neighbor_id >= 0 and not agents.has_started_moving[neighbor_id]:
+                        agents.response_time[neighbor_id] = min(
+                            agents.response_time[neighbor_id],
+                            step_number * step_seconds + SOCIAL_REACTION_DELAY_S)
 
         # Any agent has left the auditorium at any door it knows is usable, not only its own.
         on_door = (door_costs[:, next_node] == 0.0) & ~agents.door_unusable[agent_id]
@@ -623,7 +740,9 @@ def reevaluate_targets(agents: Agents, door_costs: np.ndarray, door_to_exit_cost
                        exit_costs: np.ndarray, exit_goal_cost: np.ndarray, all_exit_rows: np.ndarray,
                        main_entrance_rows: np.ndarray, occupant_at_node: np.ndarray,
                        random_generator: np.random.Generator, step_number: int) -> None:
-    is_due = ~agents.has_exited & ((step_number + np.arange(agents.num_agents)) % REEVALUATE_EVERY_STEPS == 0)
+    step_seconds = CELL_M / MAX_WALKING_SPEED_M_PER_S
+    is_due = ((~agents.has_exited) & (step_number * step_seconds >= agents.response_time)
+              & ((step_number + np.arange(agents.num_agents)) % REEVALUATE_EVERY_STEPS == 0))
     for agent_id in np.nonzero(is_due)[0]:
         node = agents.current_node[agent_id]
         knows_all = agents.knows_all_exits[agent_id]
@@ -684,6 +803,15 @@ if __name__ == "__main__":
                                             door_costs, door_to_exit_costs, led)
     occupant_at_node[fields.closed_nodes] = -2
 
+    # A separate stream preserves the existing movement and target-choice RNG.
+    response_rng = np.random.default_rng(np.random.SeedSequence([RANDOM_SEED, 1]))
+    if RESPONSE_TIME_ENABLED:
+        agents.response_time = assign_response_times(grid, response_rng)
+    initially_assigned = agents.response_time.copy()
+    seat_neighbors = immediate_seat_neighbors(grid)
+    print(f"Original response times: mean={initially_assigned.mean():.1f} s, "
+          f"median={np.median(initially_assigned):.1f} s, maximum={initially_assigned.max():.1f} s")
+
     print(f"profile: {PROFILE.name} (mean independence {agents.independence.mean():.2f})")
     for title, values in (("initial target doors", agents.target_door_name),
                           ("initial target exits", agents.target_exit_label)):
@@ -725,7 +853,7 @@ if __name__ == "__main__":
         num_redirected += apply_crowd_managers(agents, managers, door_costs, door_to_exit_costs, exit_costs,
                                                manager_random_generator, time_step_seconds)
         move_agents_one_step(grid, agents, occupant_at_node, door_costs, exit_costs, exit_goal_cost, led,
-                             tables, random_generator, step_number)
+                             tables, random_generator, step_number, seat_neighbors)
         frames.append(dict(
             node=agents.current_node.copy(),
             exited=agents.has_exited.copy(),
@@ -734,6 +862,10 @@ if __name__ == "__main__":
         ))
         if agents.has_exited.all():
             break
+    print(f"After social response: mean={agents.response_time.mean():.1f} s, "
+          f"median={np.median(agents.response_time):.1f} s, "
+          f"maximum={agents.response_time.max():.1f} s; "
+          f"{np.count_nonzero(agents.response_time < initially_assigned)} shortened")
     print(f"agents who noticed a closed exit: {int(agents.knows_closed.any(axis=1).sum())} of {agents.num_agents}")
 
     if managers is not None:
