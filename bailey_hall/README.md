@@ -57,7 +57,8 @@ First floor
   where the main aisles climb into the loge aisles, `stair_mid_W/E` from the side-section cross
   passage up to the loge side aisle = the six "access points" with the two front-corner stairs), rows AA-EE at r = 36.4 ... 48.3 ft, 4'-5" radial aisles 26 deg either side of
   south, a 4'-5" east-west side aisle at y = -10.4..-6 ft, wheelchair bay at the centre of DD/EE,
-  side boxes (5 rows x 2 blocks per side, seats facing the hall, front rail at |x| = 32.4 ft).
+  side boxes (5 rows x 2 blocks per side, seats facing the hall, front rail at |x| = 32.4 ft). A side-wall door
+  between the two box blocks (y = 13.7 ... 18.5 ft) leads into the side corridor.
 * **Back wall** (inner face r = 48.5 ft, 3 ft thick): 5 openings - the two aisle doors, the two
   side-aisle doors, and the centre door behind the wheelchair bay. The brief says "nine regular
   exit doors"; the drawings show five openings, four of which are pairs of leaves, so the model

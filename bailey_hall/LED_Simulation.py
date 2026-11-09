@@ -37,7 +37,7 @@ REEVALUATE_EVERY_STEPS = 30
 TARGET_CHOICE_SHARPNESS = 1
 VIEW_RANGE_M = 15.0
 
-PAINT_PATH = f"out/grid_paint_{CELL_M:g}m.npz"
+PAINT_PATH = f"out/layouts_0.5m/LED_Config_Version1.npz"
 BARRIERS_ENABLED = False
 
 CLOSED_EXIT_LABELS = ()

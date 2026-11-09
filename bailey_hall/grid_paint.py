@@ -1,12 +1,33 @@
 """
-Paint LEDs and barriers onto the Bailey Hall hybrid grid.
+Paint LEDs and barriers onto the Bailey Hall hybrid grid, and keep several named layouts.
 
-    python bailey_hall/grid_paint.py                       # load (or build) the 0.5 m grid and open the painter
+    python bailey_hall/grid_paint.py                       # open the layout "default"
+    python bailey_hall/grid_paint.py --layout night_show   # open (or start) the layout "night_show"
     python bailey_hall/grid_paint.py --cell-m 0.25
-    python bailey_hall/grid_paint.py --grid out/grid_hybrid_0.5m.npz --paint out/my_paint.npz
+    python bailey_hall/grid_paint.py --grid out/grid_hybrid_0.5m.npz --layouts-dir out/my_layouts
 
 The painter is a small local web page (grid_paint.html, same folder).  This file builds the grid, serves
 the page, and saves what you paint.  Put both files next to grid.py and model.py.
+
+Layouts
+-------
+Every layout is one file pair in the layouts folder (default out/layouts_<cell>m/):
+
+    default.npz    default.json
+    night_show.npz night_show.json
+    ...
+
+The server always has one CURRENT layout.  The page's normal Save button writes to it.  A small
+"Layout" bar is added to the bottom right of the page (see LAYOUT_BAR_SNIPPET) to
+    Open        switch to another saved layout (the page reloads and shows it)
+    Save as...  choose a new name; the next press of the page's Save button writes to that name
+    Rename      rename the selected layout
+    Delete      delete the selected layout
+If you build the same controls into grid_paint.html yourself, give the element id="layoutBar" and the
+server will not add its own.
+
+An older single paint file (out/grid_paint_<cell>m.npz) is copied into the layouts folder as "default"
+the first time this version starts, if there is no "default" layout yet.  The old file is left alone.
 
 What can be painted
 -------------------
@@ -33,13 +54,13 @@ Using a painted file in a simulation
     from grid import Grid
     from grid_paint import GridPaint
     grid = Grid.load("out/grid_hybrid_0.5m.npz")
-    paint = GridPaint.load("out/grid_paint_0.5m.npz", grid)
+    paint = GridPaint.load("out/layouts_0.5m/night_show.npz", grid)
     paint.cell_has_led                    # bool (2, H, W)
     paint.wall_led_segments(grid)         # list of dicts with both end points in metres
     blocked = paint.node_is_barrier(grid) # bool (nodes,), accepted by grid.node_distance_field(blocked=...)
     field = grid.node_distance_field(blocked=blocked)
 
-Saving writes <paint>.npz (arrays) and <paint>.json (a human readable list of every LED and barrier).
+Saving writes <layout>.npz (arrays) and <layout>.json (a human readable list of every LED and barrier).
 """
 from __future__ import annotations
 
@@ -47,11 +68,13 @@ import argparse
 import base64
 import json
 import os
+import re
 import threading
 import webbrowser
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -61,6 +84,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(HERE, "grid_paint.html")
 
 PAINT_FORMAT_VERSION = 1
+
+DEFAULT_LAYOUT_NAME = "default"
 
 LAYER_NAMES = ("cell_has_led", "cell_is_barrier",
                "wall_has_led_horizontal", "wall_has_led_vertical",
@@ -295,9 +320,74 @@ def summarize(grid: Grid, paint: GridPaint) -> dict:
         barrier_row_walkways=nodes(paint.walkway_is_barrier, grid.walkway_nodes))
 
 
+# ------------------------------------------------------------------- layouts --
+# A layout name becomes a file name, so keep it simple: letters, digits, space, underscore, dash and dot,
+# starting with a letter or digit, at most 64 characters.
+LAYOUT_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.\-]{0,63}")
+
+
+def valid_layout_name(name: str) -> bool:
+    return bool(LAYOUT_NAME_PATTERN.fullmatch(name)) and not name.endswith(".") and not name.lower().endswith(".tmp")
+
+
+def check_layout_name(name) -> str:
+    """Strip and validate a layout name; raise ValueError with a readable message if it cannot be used."""
+    cleaned = str(name).strip()
+    if not valid_layout_name(cleaned):
+        raise ValueError("a layout name must be 1-64 characters: letters, digits, spaces, _ - . "
+                         "(starting with a letter or digit, not ending in '.' or '.tmp')")
+    return cleaned
+
+
+def layout_path(layouts_dir: str, name: str) -> str:
+    return os.path.join(layouts_dir, name + ".npz")
+
+
+def layout_summary_path(layouts_dir: str, name: str) -> str:
+    return os.path.join(layouts_dir, name + ".json")
+
+
+def list_layouts(grid: Grid, layouts_dir: str) -> List[dict]:
+    """Every layout file in the folder, with its counts (or the reason it cannot be read on this grid)."""
+    items = []
+    if not os.path.isdir(layouts_dir):
+        return items
+    for file_name in sorted(os.listdir(layouts_dir), key=str.lower):
+        if not file_name.endswith(".npz") or file_name.endswith(".tmp.npz"):
+            continue
+        name = file_name[:-len(".npz")]
+        if not valid_layout_name(name):
+            continue
+        path = os.path.join(layouts_dir, file_name)
+        item = dict(name=name, modified=os.path.getmtime(path))
+        try:
+            item.update(ok=True, counts=paint_counts(grid, GridPaint.load(path, grid)))
+        except Exception as problem:
+            item.update(ok=False, error=f"{type(problem).__name__}: {problem}")
+        items.append(item)
+    return items
+
+
+def import_legacy_paint(grid: Grid, wall_edges, layouts_dir: str) -> bool:
+    """Copy the old single paint file (out/grid_paint_<cell>m.npz) in as the layout "default", once."""
+    legacy_path = os.path.join(HERE, "out", f"grid_paint_{grid.cell:g}m.npz")
+    target_path = layout_path(layouts_dir, DEFAULT_LAYOUT_NAME)
+    if os.path.exists(target_path) or not os.path.exists(legacy_path):
+        return False
+    try:
+        paint = GridPaint.load(legacy_path, grid)
+        paint.clip_to_grid(grid, wall_edges)
+        paint.save(target_path, grid)
+    except ValueError as problem:
+        print(f"could not import {legacy_path}: {problem}")
+        return False
+    print(f"copied the old paint file {legacy_path} into the layouts folder as '{DEFAULT_LAYOUT_NAME}'")
+    return True
+
+
 # --------------------------------------------------------------------- scene --
-def build_scene(grid: Grid, wall_edges: Tuple[np.ndarray, np.ndarray], paint: GridPaint, paint_path: str) -> dict:
-    """Everything the web page needs to draw the grid, as JSON-friendly values."""
+def build_scene(grid: Grid, wall_edges: Tuple[np.ndarray, np.ndarray]) -> dict:
+    """Everything the web page needs to draw the grid (not the paint), as JSON-friendly values."""
     horizontal_wall, vertical_wall = wall_edges
     seat_nodes, walkway_nodes = grid.spawn, grid.walkway_nodes
 
@@ -333,19 +423,127 @@ def build_scene(grid: Grid, wall_edges: Tuple[np.ndarray, np.ndarray], paint: Gr
         isDoor=encode_flags((grid.door_id >= 0) & (grid.exit_id < 0)),
         isStairs=encode_flags(grid.walkable & (grid.cell_cost > COST_FLOOR)),
         horizontalWall=encode_flags(horizontal_wall), verticalWall=encode_flags(vertical_wall),
-        exitLabels=exit_labels, seats=seats, walkways=walkways,
-        paint={camel_case(name): encode_flags(getattr(paint, name)) for name in LAYER_NAMES},
-        savePath=paint_path)
+        exitLabels=exit_labels, seats=seats, walkways=walkways)
+
+
+# The layout controls added to the page when grid_paint.html does not have its own (id="layoutBar").
+# It only talks to the /api/layout... endpoints below, so it does not depend on how the page keeps its paint.
+LAYOUT_BAR_SNIPPET = """
+<div id="layoutBar" style="position:fixed;right:8px;bottom:8px;z-index:99999;display:flex;gap:6px;align-items:center;
+     flex-wrap:wrap;max-width:96vw;padding:6px 8px;background:rgba(255,255,255,.95);color:#222;border:1px solid #888;
+     border-radius:6px;font:13px/1.3 system-ui,sans-serif;box-shadow:0 1px 6px rgba(0,0,0,.25)">
+  <b>Layout</b>
+  <select id="layoutBarSelect" style="max-width:200px"></select>
+  <button type="button" id="layoutBarOpen">Open</button>
+  <button type="button" id="layoutBarSaveAs">Save as...</button>
+  <button type="button" id="layoutBarRename">Rename</button>
+  <button type="button" id="layoutBarDelete">Delete</button>
+  <span id="layoutBarStatus" style="color:#444"></span>
+</div>
+<script>
+(function () {
+  const select = document.getElementById("layoutBarSelect");
+  const status = document.getElementById("layoutBarStatus");
+  async function call(path, body) {
+    const options = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
+                                               body: JSON.stringify(body)};
+    const response = await fetch(path, options);
+    const result = await response.json();
+    if (!response.ok || result.ok === false) throw new Error(result.error || response.statusText);
+    return result;
+  }
+  async function refresh() {
+    try {
+      const info = await call("/api/layouts");
+      const keep = select.value;
+      select.innerHTML = "";
+      for (const layout of info.layouts) {
+        const option = document.createElement("option");
+        option.value = layout.name;
+        option.textContent = layout.name + (layout.ok ? "" : " (unreadable)");
+        select.appendChild(option);
+      }
+      const names = info.layouts.map(layout => layout.name);
+      select.value = names.includes(keep) ? keep : (names.includes(info.current) ? info.current : "");
+      status.textContent = "Save writes to: " + info.current + (names.includes(info.current) ? "" : " (new)");
+    } catch (problem) {
+      status.textContent = "layouts: " + problem.message;
+    }
+  }
+  async function act(path, body, done) {
+    try { await call(path, body); if (done) done(); else await refresh(); }
+    catch (problem) { alert(problem.message); }
+  }
+  document.getElementById("layoutBarOpen").onclick = () => {
+    if (!select.value) return;
+    if (!confirm("Open '" + select.value + "'? Paint you have not saved will be lost.")) return;
+    act("/api/layout/open", {name: select.value}, () => location.reload());
+  };
+  document.getElementById("layoutBarSaveAs").onclick = () => {
+    const name = prompt("Name for the new layout (then press the page's Save button to write it):");
+    if (name) act("/api/layout/target", {name: name});
+  };
+  document.getElementById("layoutBarRename").onclick = () => {
+    if (!select.value) return;
+    const newName = prompt("New name for '" + select.value + "':", select.value);
+    if (newName && newName !== select.value) act("/api/layout/rename", {name: select.value, newName: newName});
+  };
+  document.getElementById("layoutBarDelete").onclick = () => {
+    if (!select.value) return;
+    if (!confirm("Delete the saved layout '" + select.value + "'? This cannot be undone.")) return;
+    act("/api/layout/delete", {name: select.value});
+  };
+  refresh();
+  setInterval(refresh, 3000);   // picks up the page's own Save button
+})();
+</script>
+"""
+
+
+def add_layout_bar(html_text: str) -> str:
+    if 'id="layoutBar"' in html_text:
+        return html_text
+    body_end = html_text.lower().rfind("</body>")
+    if body_end < 0:
+        return html_text + LAYOUT_BAR_SNIPPET
+    return html_text[:body_end] + LAYOUT_BAR_SNIPPET + html_text[body_end:]
 
 
 # -------------------------------------------------------------------- server --
 class PaintServer(ThreadingHTTPServer):
-    def __init__(self, address, grid: Grid, wall_edges, paint: GridPaint, paint_path: str):
+    def __init__(self, address, grid: Grid, wall_edges, layouts_dir: str, layout_name: str):
         super().__init__(address, PaintRequestHandler)
         self.grid = grid
         self.wall_edges = wall_edges
-        self.paint_path = paint_path
-        self.scene = build_scene(grid, wall_edges, paint, paint_path)
+        self.layouts_dir = layouts_dir
+        self.current_layout = layout_name           # the layout the page's Save button writes to
+        self.lock = threading.Lock()
+        self.static_scene = build_scene(grid, wall_edges)
+
+    # ------------------------------------------------------------ layout files --
+    def read_layout(self, name: str) -> GridPaint:
+        """The saved layout, or an empty one if it has not been saved yet."""
+        path = layout_path(self.layouts_dir, name)
+        if not os.path.exists(path):
+            return GridPaint.empty(self.grid)
+        paint = GridPaint.load(path, self.grid)
+        paint.clip_to_grid(self.grid, self.wall_edges)
+        return paint
+
+    def scene(self) -> dict:
+        try:
+            paint = self.read_layout(self.current_layout)
+        except ValueError as problem:
+            print(f"{problem}\nshowing an empty paint; saving will replace layout '{self.current_layout}'")
+            paint = GridPaint.empty(self.grid)
+        return dict(self.static_scene,
+                    paint={camel_case(name): encode_flags(getattr(paint, name)) for name in LAYER_NAMES},
+                    layoutName=self.current_layout, layoutsDir=self.layouts_dir,
+                    savePath=layout_path(self.layouts_dir, self.current_layout))
+
+    def layouts_info(self) -> dict:
+        return dict(ok=True, current=self.current_layout, dir=self.layouts_dir,
+                    layouts=list_layouts(self.grid, self.layouts_dir))
 
 
 class PaintRequestHandler(BaseHTTPRequestHandler):
@@ -365,35 +563,107 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
     def _reply_json(self, status: int, payload: dict):
         self._reply(status, json.dumps(payload).encode("utf-8"), "application/json")
 
+    # --------------------------------------------------------------------- GET --
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            with open(HTML_PATH, "rb") as html_file:      # read each time so edits show on reload
-                self._reply(200, html_file.read(), "text/html; charset=utf-8")
-        elif self.path == "/api/scene":
-            self._reply_json(200, self.server.scene)
-        elif self.path == "/favicon.ico":
+        path = urlsplit(self.path).path
+        if path in ("/", "/index.html"):
+            with open(HTML_PATH, "r", encoding="utf-8") as html_file:      # read each time so edits show on reload
+                html_text = add_layout_bar(html_file.read())
+            self._reply(200, html_text.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/api/scene":
+            with self.server.lock:
+                scene = self.server.scene()
+            self._reply_json(200, scene)
+        elif path == "/api/layouts":
+            with self.server.lock:
+                info = self.server.layouts_info()
+            self._reply_json(200, info)
+        elif path == "/favicon.ico":
             self._reply(204, b"", "image/x-icon")
         else:
             self._reply(404, b"not found", "text/plain")
 
+    # -------------------------------------------------------------------- POST --
     def do_POST(self):
-        if self.path != "/api/save":
+        routes = {"/api/save": self._save,
+                  "/api/layout/open": self._open_layout,
+                  "/api/layout/target": self._set_save_target,
+                  "/api/layout/rename": self._rename_layout,
+                  "/api/layout/delete": self._delete_layout}
+        handler = routes.get(urlsplit(self.path).path)
+        if handler is None:
             self._reply(404, b"not found", "text/plain")
             return
         try:
             body_length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(body_length))
-            grid = self.server.grid
-            shapes = layer_shapes(grid)
-            layers = {name: decode_flags(payload["layers"][camel_case(name)], shapes[name]) for name in LAYER_NAMES}
-            paint = GridPaint.from_layers(layers, grid)
-            dropped = paint.clip_to_grid(grid, self.server.wall_edges)
-            paint.save(self.server.paint_path, grid)
-            self._reply_json(200, dict(ok=True, path=self.server.paint_path,
-                                       summaryPath=os.path.splitext(self.server.paint_path)[0] + ".json",
-                                       droppedFlags=dropped, counts=paint_counts(grid, paint)))
+            payload = json.loads(self.rfile.read(body_length) or b"{}")
+            with self.server.lock:
+                result = handler(payload)
+            self._reply_json(200, result)
+        except FileNotFoundError as problem:
+            self._reply_json(404, dict(ok=False, error=str(problem)))
         except Exception as problem:
             self._reply_json(400, dict(ok=False, error=f"{type(problem).__name__}: {problem}"))
+
+    def _save(self, payload: dict) -> dict:
+        """Save the painted layers.  "name" (optional) is the layout to write; without it the current one is used."""
+        server = self.server
+        grid = server.grid
+        name = check_layout_name(payload["name"]) if payload.get("name") else server.current_layout
+        shapes = layer_shapes(grid)
+        layers = {layer: decode_flags(payload["layers"][camel_case(layer)], shapes[layer]) for layer in LAYER_NAMES}
+        paint = GridPaint.from_layers(layers, grid)
+        dropped = paint.clip_to_grid(grid, server.wall_edges)
+        path = layout_path(server.layouts_dir, name)
+        paint.save(path, grid)
+        server.current_layout = name
+        return dict(ok=True, name=name, path=path, summaryPath=layout_summary_path(server.layouts_dir, name),
+                    droppedFlags=dropped, counts=paint_counts(grid, paint))
+
+    def _open_layout(self, payload: dict) -> dict:
+        """Make a saved layout the current one.  The page then reloads and gets its paint from /api/scene."""
+        name = check_layout_name(payload.get("name", ""))
+        if not os.path.exists(layout_path(self.server.layouts_dir, name)):
+            raise FileNotFoundError(f"there is no layout called '{name}'")
+        self.server.read_layout(name)             # raises ValueError if it was painted on a different grid
+        self.server.current_layout = name
+        return dict(ok=True, name=name)
+
+    def _set_save_target(self, payload: dict) -> dict:
+        """Choose the name the next Save writes to ("Save as").  Nothing is written yet."""
+        name = check_layout_name(payload.get("name", ""))
+        self.server.current_layout = name
+        return dict(ok=True, name=name, exists=os.path.exists(layout_path(self.server.layouts_dir, name)))
+
+    def _rename_layout(self, payload: dict) -> dict:
+        server = self.server
+        name = check_layout_name(payload.get("name", ""))
+        new_name = check_layout_name(payload.get("newName", ""))
+        old_path, new_path = layout_path(server.layouts_dir, name), layout_path(server.layouts_dir, new_name)
+        if not os.path.exists(old_path):
+            raise FileNotFoundError(f"there is no layout called '{name}'")
+        if name.lower() != new_name.lower() and os.path.exists(new_path):
+            raise ValueError(f"a layout called '{new_name}' already exists")
+        os.replace(old_path, new_path)
+        old_summary = layout_summary_path(server.layouts_dir, name)
+        if os.path.exists(old_summary):
+            os.replace(old_summary, layout_summary_path(server.layouts_dir, new_name))
+        if server.current_layout == name:
+            server.current_layout = new_name
+        return dict(ok=True, name=new_name)
+
+    def _delete_layout(self, payload: dict) -> dict:
+        server = self.server
+        name = check_layout_name(payload.get("name", ""))
+        path = layout_path(server.layouts_dir, name)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"there is no layout called '{name}'")
+        os.remove(path)
+        summary_path = layout_summary_path(server.layouts_dir, name)
+        if os.path.exists(summary_path):
+            os.remove(summary_path)
+        # If it was the current layout, the name stays as the target of the next Save (it is now a new layout).
+        return dict(ok=True, name=name)
 
 
 # ---------------------------------------------------------------------- main --
@@ -416,29 +686,37 @@ def main():
     parser = argparse.ArgumentParser(description="Paint LEDs and barriers onto the Bailey Hall grid.")
     parser.add_argument("--grid", help="saved grid .npz (default: out/grid_hybrid_<cell>m.npz if it exists, else build)")
     parser.add_argument("--cell-m", type=float, default=0.5, help="cell size in metres when the grid is built")
-    parser.add_argument("--paint", help="paint file to open and save (default: out/grid_paint_<cell>m.npz)")
+    parser.add_argument("--layouts-dir", help="folder that holds the saved layouts (default: out/layouts_<cell>m)")
+    parser.add_argument("--layout", default=DEFAULT_LAYOUT_NAME,
+                        help=f"layout to open first and save to (default: {DEFAULT_LAYOUT_NAME}); "
+                             "a name that does not exist yet starts an empty layout")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="do not open the page automatically")
     arguments = parser.parse_args()
 
     grid = load_or_build_grid(arguments.grid, arguments.cell_m)
     wall_edges = find_wall_edges(grid)
-    paint_path = arguments.paint or os.path.join(HERE, "out", f"grid_paint_{grid.cell:g}m.npz")
-    os.makedirs(os.path.dirname(os.path.abspath(paint_path)), exist_ok=True)
+    layouts_dir = os.path.abspath(arguments.layouts_dir or os.path.join(HERE, "out", f"layouts_{grid.cell:g}m"))
+    os.makedirs(layouts_dir, exist_ok=True)
+    layout_name = check_layout_name(arguments.layout)
 
-    paint = GridPaint.empty(grid)
-    if os.path.exists(paint_path):
+    import_legacy_paint(grid, wall_edges, layouts_dir)
+
+    server = PaintServer(("127.0.0.1", arguments.port), grid, wall_edges, layouts_dir, layout_name)
+
+    saved_layouts = list_layouts(grid, layouts_dir)
+    print(f"layouts folder {layouts_dir}: " + (", ".join(item["name"] for item in saved_layouts) or "no saved layouts yet"))
+    if os.path.exists(layout_path(layouts_dir, layout_name)):
         try:
-            paint = GridPaint.load(paint_path, grid)
-            dropped = paint.clip_to_grid(grid, wall_edges)
-            print(f"opened {paint_path}" + (f" ({dropped} flags were on things that no longer exist and were dropped)"
-                                           if dropped else ""))
+            server.read_layout(layout_name)
+            print(f"opened layout '{layout_name}'")
         except ValueError as problem:
-            print(f"{problem}\nstarting with an empty paint; saving will replace {paint_path}")
+            print(f"{problem}\nstarting with an empty paint; saving will replace layout '{layout_name}'")
+    else:
+        print(f"layout '{layout_name}' is new; it is created when you press Save")
 
-    server = PaintServer(("127.0.0.1", arguments.port), grid, wall_edges, paint, paint_path)
     address = f"http://127.0.0.1:{arguments.port}/"
-    print(f"painter running at {address}   (Ctrl+C to stop)\nsaves to {paint_path}")
+    print(f"painter running at {address}   (Ctrl+C to stop)")
     if not arguments.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(address)).start()
     try:
