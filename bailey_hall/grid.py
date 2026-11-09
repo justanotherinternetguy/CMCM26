@@ -650,12 +650,66 @@ class Grid:
         classes[stair_cells] = 2
         return classes
 
+    def _lattice_step_keys(self) -> np.ndarray:
+        is_lattice = self.edge_kind == EDGE_LATTICE
+        return self.edge_from[is_lattice].astype(np.int64) * self.num_nodes + self.edge_to[is_lattice]
+
+    def _first_floor_stair_ends(self) -> List[Tuple[float, float]]:
+        """Points where a first-floor stair (cells of stair cost) meets ordinary floor.
+
+        The cell edges people step across are grouped where they touch, one point per group.  East-west
+        and north-south crossings are grouped apart, so each face of a stair gets its own point."""
+        nodes = self.cell_node[FIRST_FLOOR].astype(np.int64)
+        on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cost[FIRST_FLOOR] == COST_STAIRS)
+        step_keys = self._lattice_step_keys()
+        num_rows, num_columns = nodes.shape
+        ends = []
+        for row_step, column_step in ((0, 1), (1, 0)):
+            points = []
+            here = nodes[:num_rows - row_step, :num_columns - column_step]
+            there = nodes[row_step:, column_step:]
+            stair_here = on_stair[:num_rows - row_step, :num_columns - column_step]
+            stair_there = on_stair[row_step:, column_step:]
+            crossing = ((here >= 0) & (there >= 0) & (stair_here != stair_there)
+                        & np.isin(here * self.num_nodes + there, step_keys))
+            for row, column in zip(*np.nonzero(crossing)):
+                x, y = self.xy(row, column)
+                points.append((x + column_step * self.cell / 2, y - row_step * self.cell / 2))
+            if not points:
+                continue
+            points = np.array(points)
+            gaps = np.hypot(points[:, None, 0] - points[None, :, 0], points[:, None, 1] - points[None, :, 1])
+            starts, stops = np.nonzero(np.triu(gaps <= self.cell * 1.01, 1))
+            groups = _connected_labels(len(points), starts, stops)
+            ends += [tuple(points[groups == group].mean(axis=0)) for group in np.unique(groups)]
+        return ends
+
+    def _balcony_stairs(self) -> List[Tuple[str, Tuple[float, float], Optional[Tuple[float, float]]]]:
+        """(label, top on the balcony, bottom on the first floor or None when the stair is not in the graph)."""
+        is_stair = self.edge_kind == EDGE_STAIR
+        stairs = []
+        for door in sorted(name for name in self.doors if name.startswith("balcony_exit_")):
+            rows, columns = np.nonzero(self.door_id[BALCONY] == self.doors.index(door))
+            top_x, top_y = self.xy(rows, columns)
+            head_nodes = self.cell_node[BALCONY][rows, columns]
+            bottom = None
+            if np.isin(head_nodes, self.edge_from[is_stair]).any():
+                # Follow the one-way chain down to the first-floor cells it lands on.
+                reached, frontier = set(), set(head_nodes.tolist())
+                while frontier:
+                    step = is_stair & np.isin(self.edge_from, list(frontier))
+                    frontier = set(self.edge_to[step].tolist()) - reached
+                    reached |= frontier
+                landing = [node for node in reached if self.node_level[node] == FIRST_FLOOR]
+                bottom = (float(self.node_x[landing].mean()), float(self.node_y[landing].mean()))
+            stairs.append((door.replace("balcony_exit_", ""), (float(top_x.mean()), float(top_y.mean())), bottom))
+        return stairs
+
     def _thin_wall_segments(self, level_index: int) -> List[List[Tuple[float, float]]]:
         """Cell edges a wall runs along: both cells are walkable but the lattice has no step between them.
 
         These walls are thinner than a cell, so the walkable mask alone cannot show them."""
-        is_lattice = self.edge_kind == EDGE_LATTICE
-        step_keys = self.edge_from[is_lattice].astype(np.int64) * self.num_nodes + self.edge_to[is_lattice]
+        step_keys = self._lattice_step_keys()
         nodes = self.cell_node[level_index].astype(np.int64)
         segments = []
 
@@ -685,6 +739,10 @@ class Grid:
         seat_color = "#a3a7ad" if highlight_doors else "#d1495b"
         gateway_colors = ("#2f7fc1", "#d1495b", "#f2b01e")
         gateways = self._gateway_classes()
+        stair_color = "#8a63c9"
+        marker_style = dict(s=70, c="#111111", edgecolors="white", linewidths=1.2, zorder=5)
+        label_style = dict(textcoords="offset points", fontsize=7.5, color="#111111", zorder=6,
+                           bbox=dict(boxstyle="round,pad=0.2", facecolor="white", linewidth=0, alpha=0.9))
         _, num_rows, num_columns = self.shape
         extent = (self.x0, self.x0 + num_columns * self.cell, self.y0 - num_rows * self.cell, self.y0)
         figure, axes = plt.subplots(1, 2, figsize=(15, 7.2), dpi=140, constrained_layout=True)
@@ -705,6 +763,25 @@ class Grid:
                                   bbox=dict(boxstyle="round,pad=0.15", facecolor="white", linewidth=0))
             axis.add_collection(LineCollection(self._thin_wall_segments(level_index), colors=wall_color,
                                                linewidths=2.0, capstyle="projecting", zorder=3))
+            if highlight_doors:
+                if level_index == FIRST_FLOOR:
+                    on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cost[FIRST_FLOOR] == COST_STAIRS)
+                    axis.imshow(np.where(on_stair, 1.0, np.nan), extent=extent, interpolation="nearest",
+                                cmap=ListedColormap([stair_color]), zorder=2)
+                    ends = np.array(self._first_floor_stair_ends())
+                    if len(ends):
+                        axis.scatter(ends[:, 0], ends[:, 1], marker="D", **{**marker_style, "s": 38})
+                for name, top, bottom in self._balcony_stairs():
+                    side = -1 if top[0] < 0 else 1
+                    if level_index == BALCONY:
+                        axis.scatter(*top, marker="v", **marker_style)
+                        text = f"stair {name} top" if bottom else f"stair {name} top\n(not in graph)"
+                        axis.annotate(text, top, xytext=(-side * 10, -24), ha="right" if side > 0 else "left",
+                                      **label_style)
+                    elif bottom is not None:
+                        axis.scatter(*bottom, marker="o", **marker_style)
+                        axis.annotate(f"stair {name} bottom", bottom, xytext=(side * 10, 10),
+                                      ha="left" if side > 0 else "right", **label_style)
             axis.set_title(f"{LEVEL_NAMES[level_index].replace('_', ' ')}: "
                            f"{int(self.walkable[level_index].sum())} cells, {int(seat.sum())} seats", fontsize=11)
             axis.set_xlabel("x east [m]")
@@ -720,7 +797,15 @@ class Grid:
         if highlight_doors:
             legend += [Patch(facecolor=color, label=label) for color, label in
                        zip(gateway_colors, ("Interior doorway", "Exit to outside", "Door to stairs or stair landing"))]
-        figure.legend(handles=legend, loc="outside lower center", ncol=len(legend), frameon=False, fontsize=10)
+            legend += [Patch(facecolor=stair_color, label="First-floor stair (two-way)"),
+                       Line2D([], [], marker="D", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
+                              markersize=6, label="Stair end (on/off point)"),
+                       Line2D([], [], marker="v", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
+                              markersize=8, label="Balcony stair entrance (top)"),
+                       Line2D([], [], marker="o", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
+                              markersize=8, label="Balcony stair exit (bottom)")]
+        figure.legend(handles=legend, loc="outside lower center", ncol=min(len(legend), 5), frameon=False,
+                      fontsize=10)
         figure.suptitle(f"Hybrid grid {'doors and exits' if highlight_doors else 'layout'} at {self.cell:g} m",
                         fontsize=12)
         figure.savefig(path, bbox_inches="tight")
