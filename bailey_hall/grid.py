@@ -725,85 +725,104 @@ class Grid:
             segments.append([(self.x0 + column * self.cell, y), (self.x0 + (column + 1) * self.cell, y)])
         return segments
 
-    def render_layout(self, path: str, highlight_doors: bool = False):
-        """Plot walls, walkable tiles and seats with no distance shading, optionally marking door cells."""
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+    LAYOUT_WALL_COLOR, LAYOUT_FLOOR_COLOR, LAYOUT_STAIR_COLOR = "#3a3f47", "#ece8df", "#8a63c9"
+    LAYOUT_GATEWAY_COLORS = ("#2f7fc1", "#d1495b", "#f2b01e")
+    _MARKER_STYLE = dict(s=70, c="#111111", edgecolors="white", linewidths=1.2, zorder=5)
+    _LABEL_STYLE = dict(textcoords="offset points", fontsize=7.5, color="#111111", zorder=6,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor="white", linewidth=0, alpha=0.9))
+
+    def draw_layout(self, axis, level_index: int, highlight_doors: bool = False):
+        """Draw one level's floor plan on a matplotlib axis: walls, walkable tiles, seats and thin walls.
+
+        With highlight_doors it also marks doorways, exits, stair cells and every stair entrance and
+        exit.  render_layout and animate.py both draw through here, so the two pictures always match.
+        Everything is drawn below zorder 7, so draw moving things above that."""
         from matplotlib.collections import LineCollection
         from matplotlib.colors import ListedColormap
+
+        _, num_rows, num_columns = self.shape
+        extent = (self.x0, self.x0 + num_columns * self.cell, self.y0 - num_rows * self.cell, self.y0)
+        seat_color = "#a3a7ad" if highlight_doors else "#d1495b"
+        axis.imshow(np.where(self.walkable[level_index], 1.0, np.nan), extent=extent, interpolation="nearest",
+                    cmap=ListedColormap([self.LAYOUT_FLOOR_COLOR]))
+        on_level = self.node_level == level_index
+        walkway = on_level & (self.node_kind == NODE_WALKWAY)
+        seat = on_level & (self.node_kind == NODE_SEAT)
+        # Row walkways are not lattice cells, so they are drawn as points in the walkable colour.
+        axis.scatter(self.node_x[walkway], self.node_y[walkway], c=self.LAYOUT_FLOOR_COLOR, s=9, marker="s",
+                     linewidths=0)
+        axis.scatter(self.node_x[seat], self.node_y[seat], c=seat_color, s=7, marker="s", linewidths=0)
+        if highlight_doors:
+            gateways = self._gateway_classes()[level_index]
+            axis.imshow(np.where(gateways >= 0, gateways.astype(float), np.nan), extent=extent,
+                        interpolation="nearest", cmap=ListedColormap(self.LAYOUT_GATEWAY_COLORS), vmin=0, vmax=2)
+            self._label_exits(axis, level_index, color="#111111",
+                              bbox=dict(boxstyle="round,pad=0.15", facecolor="white", linewidth=0))
+        axis.add_collection(LineCollection(self._thin_wall_segments(level_index), colors=self.LAYOUT_WALL_COLOR,
+                                           linewidths=2.0, capstyle="projecting", zorder=3))
+        if highlight_doors:
+            if level_index == FIRST_FLOOR:
+                on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cost[FIRST_FLOOR] == COST_STAIRS)
+                axis.imshow(np.where(on_stair, 1.0, np.nan), extent=extent, interpolation="nearest",
+                            cmap=ListedColormap([self.LAYOUT_STAIR_COLOR]), zorder=2)
+                ends = np.array(self._first_floor_stair_ends())
+                if len(ends):
+                    axis.scatter(ends[:, 0], ends[:, 1], marker="D", **{**self._MARKER_STYLE, "s": 38})
+            for name, top, bottom in self._balcony_stairs():
+                side = -1 if top[0] < 0 else 1
+                if level_index == BALCONY:
+                    axis.scatter(*top, marker="v", **self._MARKER_STYLE)
+                    text = f"stair {name} top" if bottom else f"stair {name} top\n(not in graph)"
+                    axis.annotate(text, top, xytext=(-side * 10, -24), ha="right" if side > 0 else "left",
+                                  **self._LABEL_STYLE)
+                elif bottom is not None:
+                    axis.scatter(*bottom, marker="o", **self._MARKER_STYLE)
+                    axis.annotate(f"stair {name} bottom", bottom, xytext=(side * 10, 10),
+                                  ha="left" if side > 0 else "right", **self._LABEL_STYLE)
+        axis.set_xlabel("x east [m]")
+        axis.set_ylabel("y north [m]")
+        axis.set_aspect("equal")
+        axis.set_facecolor(self.LAYOUT_WALL_COLOR)
+        axis.tick_params(length=0, labelsize=8)
+        for spine in axis.spines.values():
+            spine.set_visible(False)
+
+    def layout_legend(self, highlight_doors: bool = False) -> list:
+        """Legend handles for what draw_layout draws."""
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
 
-        wall_color, walkable_color = "#3a3f47", "#ece8df"
+        def marker(shape, size, label):
+            return Line2D([], [], marker=shape, linestyle="", markerfacecolor="#111111", markeredgecolor="white",
+                          markersize=size, label=label)
+
         seat_color = "#a3a7ad" if highlight_doors else "#d1495b"
-        gateway_colors = ("#2f7fc1", "#d1495b", "#f2b01e")
-        gateways = self._gateway_classes()
-        stair_color = "#8a63c9"
-        marker_style = dict(s=70, c="#111111", edgecolors="white", linewidths=1.2, zorder=5)
-        label_style = dict(textcoords="offset points", fontsize=7.5, color="#111111", zorder=6,
-                           bbox=dict(boxstyle="round,pad=0.2", facecolor="white", linewidth=0, alpha=0.9))
-        _, num_rows, num_columns = self.shape
-        extent = (self.x0, self.x0 + num_columns * self.cell, self.y0 - num_rows * self.cell, self.y0)
-        figure, axes = plt.subplots(1, 2, figsize=(15, 7.2), dpi=140, constrained_layout=True)
-        for level_index, axis in enumerate(axes):
-            axis.imshow(np.where(self.walkable[level_index], 1.0, np.nan), extent=extent, interpolation="nearest",
-                        cmap=ListedColormap([walkable_color]))
-            on_level = self.node_level == level_index
-            walkway = on_level & (self.node_kind == NODE_WALKWAY)
-            seat = on_level & (self.node_kind == NODE_SEAT)
-            # Row walkways are not lattice cells, so they are drawn as points in the walkable colour.
-            axis.scatter(self.node_x[walkway], self.node_y[walkway], c=walkable_color, s=9, marker="s", linewidths=0)
-            axis.scatter(self.node_x[seat], self.node_y[seat], c=seat_color, s=7, marker="s", linewidths=0)
-            if highlight_doors:
-                axis.imshow(np.where(gateways[level_index] >= 0, gateways[level_index].astype(float), np.nan),
-                            extent=extent, interpolation="nearest", cmap=ListedColormap(gateway_colors),
-                            vmin=0, vmax=2)
-                self._label_exits(axis, level_index, color="#111111",
-                                  bbox=dict(boxstyle="round,pad=0.15", facecolor="white", linewidth=0))
-            axis.add_collection(LineCollection(self._thin_wall_segments(level_index), colors=wall_color,
-                                               linewidths=2.0, capstyle="projecting", zorder=3))
-            if highlight_doors:
-                if level_index == FIRST_FLOOR:
-                    on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cost[FIRST_FLOOR] == COST_STAIRS)
-                    axis.imshow(np.where(on_stair, 1.0, np.nan), extent=extent, interpolation="nearest",
-                                cmap=ListedColormap([stair_color]), zorder=2)
-                    ends = np.array(self._first_floor_stair_ends())
-                    if len(ends):
-                        axis.scatter(ends[:, 0], ends[:, 1], marker="D", **{**marker_style, "s": 38})
-                for name, top, bottom in self._balcony_stairs():
-                    side = -1 if top[0] < 0 else 1
-                    if level_index == BALCONY:
-                        axis.scatter(*top, marker="v", **marker_style)
-                        text = f"stair {name} top" if bottom else f"stair {name} top\n(not in graph)"
-                        axis.annotate(text, top, xytext=(-side * 10, -24), ha="right" if side > 0 else "left",
-                                      **label_style)
-                    elif bottom is not None:
-                        axis.scatter(*bottom, marker="o", **marker_style)
-                        axis.annotate(f"stair {name} bottom", bottom, xytext=(side * 10, 10),
-                                      ha="left" if side > 0 else "right", **label_style)
-            axis.set_title(f"{LEVEL_NAMES[level_index].replace('_', ' ')}: "
-                           f"{int(self.walkable[level_index].sum())} cells, {int(seat.sum())} seats", fontsize=11)
-            axis.set_xlabel("x east [m]")
-            axis.set_ylabel("y north [m]")
-            axis.set_aspect("equal")
-            axis.set_facecolor(wall_color)
-            axis.tick_params(length=0, labelsize=8)
-            for spine in axis.spines.values():
-                spine.set_visible(False)
-        legend = [Patch(facecolor=wall_color, label="Wall or not walkable"),
-                  Patch(facecolor=walkable_color, edgecolor="#999999", label="Walkable"),
+        legend = [Patch(facecolor=self.LAYOUT_WALL_COLOR, label="Wall or not walkable"),
+                  Patch(facecolor=self.LAYOUT_FLOOR_COLOR, edgecolor="#999999", label="Walkable"),
                   Line2D([], [], marker="s", linestyle="", color=seat_color, label="Seat")]
         if highlight_doors:
             legend += [Patch(facecolor=color, label=label) for color, label in
-                       zip(gateway_colors, ("Interior doorway", "Exit to outside", "Door to stairs or stair landing"))]
-            legend += [Patch(facecolor=stair_color, label="First-floor stair (two-way)"),
-                       Line2D([], [], marker="D", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
-                              markersize=6, label="Stair end (on/off point)"),
-                       Line2D([], [], marker="v", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
-                              markersize=8, label="Balcony stair entrance (top)"),
-                       Line2D([], [], marker="o", linestyle="", markerfacecolor="#111111", markeredgecolor="white",
-                              markersize=8, label="Balcony stair exit (bottom)")]
+                       zip(self.LAYOUT_GATEWAY_COLORS,
+                           ("Interior doorway", "Exit to outside", "Door to stairs or stair landing"))]
+            legend += [Patch(facecolor=self.LAYOUT_STAIR_COLOR, label="First-floor stair (two-way)"),
+                       marker("D", 6, "Stair end (on/off point)"),
+                       marker("v", 8, "Balcony stair entrance (top)"),
+                       marker("o", 8, "Balcony stair exit (bottom)")]
+        return legend
+
+    def render_layout(self, path: str, highlight_doors: bool = False):
+        """Plot walls, walkable tiles and seats with no distance shading, optionally marking doors and stairs."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figure, axes = plt.subplots(1, 2, figsize=(15, 7.2), dpi=140, constrained_layout=True)
+        for level_index, axis in enumerate(axes):
+            self.draw_layout(axis, level_index, highlight_doors)
+            num_seats = int(((self.node_level == level_index) & (self.node_kind == NODE_SEAT)).sum())
+            axis.set_title(f"{LEVEL_NAMES[level_index].replace('_', ' ')}: "
+                           f"{int(self.walkable[level_index].sum())} cells, {num_seats} seats", fontsize=11)
+        legend = self.layout_legend(highlight_doors)
         figure.legend(handles=legend, loc="outside lower center", ncol=min(len(legend), 5), frameon=False,
                       fontsize=10)
         figure.suptitle(f"Hybrid grid {'doors and exits' if highlight_doors else 'layout'} at {self.cell:g} m",

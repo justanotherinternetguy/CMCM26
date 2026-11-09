@@ -842,3 +842,248 @@
 ✻ Churned for 1m 18s · done 7:10 PM
 
 ※ recap: You're correcting the Bailey Hall grid's doors and exits, and I just added side doors from the aisle between each side's two stage-end seat blocks into the hallways. Next, rerun the simulation, since `run.npz` and `run.gif` predate these doors.
+
+❯ /export                                                                       
+  ⎿  Conversation exported to: C:\Users\jason\OneDrive\Documents\GitHub\CMCM26\b
+     ailey_hall\Grid_Generation_AI_Usage.txt
+
+❯ can you point out the stair entrance and exits on the diagram?                
+  ⎿  1 skill available
+
+● Login reached its time limit · Please run /login
+
+✻ Cooked for 0s · done 9:15 PM
+
+❯ /login 
+  ⎿  Login successful
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I'm marking the first-floor stairs in purple and the balcony stairs with
+  arrows and circles, drawn from the grid data itself.
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The shell mis-parsed the patch, so nothing was changed, and the image above is
+  the old one. I'll write the patch script to a file and run it from there.
+
+  Made 1 scratchpad edit +124 (ctrl+o to expand)
+
+● Bash(cd "C:/Users/jason/OneDrive/Documents/GitHub/CMCM26/bailey_hall" &&
+      python "C:/Users/jason/AppData/Local/Temp/claude/89b9c43069ee76cb/6fad6bdc
+      -7d60-4500-ae11-ce…)
+  ⎿  patched
+     [(-13.5, 10.75), (-11.0, 10.75), (11.0, 10.75), (13.5, 10.75), (-5.0,
+     -10.25), (5.0, -10.25), (-9.5, 10.0), (9.5, 10.0), (-9.25, 8.0), (9.25
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated grid.py (+85 -3)
+      650          classes[stair_cells] = 2
+      651          return classes
+      652  
+      653 +    def _lattice_step_keys(self) -> np.ndarray:               
+      654 +        is_lattice = self.edge_kind == EDGE_LATTICE           
+      655 +        return self.edge_from[is_lattice].astype(np.int64) * s
+          +elf.num_nodes + self.edge_to[is_lattice]                      
+      656 +                                                              
+      657 +    def _first_floor_stair_ends(self) -> List[Tuple[float, flo
+          +at]]:                                                         
+      658 +        """Points where a first-floor stair (cells of stair co
+          +st) meets ordinary floor.                                     
+      659 +                                                              
+      660 +        The cell edges people step across are grouped where th
+          +ey touch, one point per group."""                             
+      661 +        nodes = self.cell_node[FIRST_FLOOR].astype(np.int64)  
+      662 +        on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cos
+          +t[FIRST_FLOOR] == COST_STAIRS)                                
+      663 +        step_keys = self._lattice_step_keys()                 
+      664 +        num_rows, num_columns = nodes.shape                   
+      665 +        points = []                                           
+      666 +        for row_step, column_step in ((0, 1), (1, 0)):        
+      667 +            here = nodes[:num_rows - row_step, :num_columns - 
+          +column_step]                                                  
+      668 +            there = nodes[row_step:, column_step:]            
+      669 +            stair_here = on_stair[:num_rows - row_step, :num_c
+          +olumns - column_step]                                         
+      670 +            stair_there = on_stair[row_step:, column_step:]   
+      671 +            crossing = ((here >= 0) & (there >= 0) & (stair_he
+          +re != stair_there)                                            
+      672 +                        & np.isin(here * self.num_nodes + ther
+          +e, step_keys))                                                
+      673 +            for row, column in zip(*np.nonzero(crossing)):    
+      674 +                x, y = self.xy(row, column)                   
+      675 +                points.append((x + column_step * self.cell / 2
+          +, y - row_step * self.cell / 2))                              
+      676 +        if not points:                                        
+      677 +            return []                                         
+      678 +        points = np.array(points)                             
+      679 +        gaps = np.hypot(points[:, None, 0] - points[None, :, 0
+          +], points[:, None, 1] - points[None, :, 1])                   
+      680 +        starts, stops = np.nonzero(np.triu(gaps <= self.cell *
+          + 1.01, 1))                                                    
+      681 +        groups = _connected_labels(len(points), starts, stops)
+      682 +        return [tuple(points[groups == group].mean(axis=0)) fo
+          +r group in np.unique(groups)]                                 
+      683 +                                                              
+      684 +    def _balcony_stairs(self) -> List[Tuple[str, Tuple[float, 
+          +float], Optional[Tuple[float, float]]]]:                      
+      685 +        """(label, top on the balcony, bottom on the first flo
+          +or or None when the stair is not in the graph)."""            
+      686 +        is_stair = self.edge_kind == EDGE_STAIR               
+      687 +        stairs = []                                           
+      688 +        for door in sorted(name for name in self.doors if name
+          +.startswith("balcony_exit_")):                                
+      689 +            rows, columns = np.nonzero(self.door_id[BALCONY] =
+          += self.doors.index(door))                                     
+     … 76 more lines (ctrl+o to expand)
+  ⎿  … 1 more file changed
+
+  Read 1 file (ctrl+o to expand)
+
+● The markers look right everywhere except the two mid stairs at (±10, -2.25),
+  which got only one marker each. I'll check which sides of those stairs
+  actually touch the floor.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The mid stairs are fine in the grid, with contacts from the west, east and
+  south sides. The marker code merged those into one point, so I'm grouping
+  contacts by direction so each stair face gets its own marker.
+
+● Update(grid.py)
+  ⎿  Added 4 lines, removed 2 lines
+      657      def _first_floor_stair_ends(self) -> List[Tuple[float, flo
+           at]]:
+      658          """Points where a first-floor stair (cells of stair co
+           st) meets ordinary floor.
+      659  
+      660 -        The cell edges people step across are grouped where th
+          -ey touch, one point per group."""                             
+      660 +        The cell edges people step across are grouped where th
+          +ey touch, one point per group.  East-west                     
+      661 +        and north-south crossings are grouped apart, so each f
+          +ace of a stair gets its own point."""                         
+      662          nodes = self.cell_node[FIRST_FLOOR].astype(np.int64)
+      663          on_stair = self.walkable[FIRST_FLOOR] & (self.cell_cos
+           t[FIRST_FLOOR] == COST_STAIRS)
+      664          step_keys = self._lattice_step_keys()
+      665          num_rows, num_columns = nodes.shape
+      665 -        points = []                                           
+      666 +        ends = []                                             
+      667          for row_step, column_step in ((0, 1), (1, 0)):
+      668 +            points = []                                       
+      669              here = nodes[:num_rows - row_step, :num_columns - 
+           column_step]
+      670              there = nodes[row_step:, column_step:]
+      671              stair_here = on_stair[:num_rows - row_step, :num_c
+           olumns - column_step]
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(grid.py)
+  ⎿  Added 8 lines, removed 7 lines
+      675              for row, column in zip(*np.nonzero(crossing)):
+      676                  x, y = self.xy(row, column)
+      677                  points.append((x + column_step * self.cell / 2
+           , y - row_step * self.cell / 2))
+      678 -        if not points:                                        
+      679 -            return []                                         
+      680 -        points = np.array(points)                             
+      681 -        gaps = np.hypot(points[:, None, 0] - points[None, :, 0
+          -], points[:, None, 1] - points[None, :, 1])                   
+      682 -        starts, stops = np.nonzero(np.triu(gaps <= self.cell *
+          - 1.01, 1))                                                    
+      683 -        groups = _connected_labels(len(points), starts, stops)
+      684 -        return [tuple(points[groups == group].mean(axis=0)) fo
+          -r group in np.unique(groups)]                                 
+      678 +            if not points:                                    
+      679 +                continue                                      
+      680 +            points = np.array(points)                         
+      681 +            gaps = np.hypot(points[:, None, 0] - points[None, 
+          +:, 0], points[:, None, 1] - points[None, :, 1])               
+      682 +            starts, stops = np.nonzero(np.triu(gaps <= self.ce
+          +ll * 1.01, 1))                                                
+      683 +            groups = _connected_labels(len(points), starts, st
+          +ops)                                                          
+      684 +            ends += [tuple(points[groups == group].mean(axis=0
+          +)) for group in np.unique(groups)]                            
+      685 +        return ends                                           
+      686  
+      687      def _balcony_stairs(self) -> List[Tuple[str, Tuple[float, 
+           float], Optional[Tuple[float, float]]]]:
+      688          """(label, top on the balcony, bottom on the first flo
+           or or None when the stair is not in the graph)."""
+
+● Bash(cd "C:/Users/jason/OneDrive/Documents/GitHub/CMCM26/bailey_hall" && git
+      -C .. status --short && git -C .. diff --stat && PYTHONPATH=. python -c "
+      import os…)
+  ⎿   M bailey_hall/LED_Simulation.py
+      M bailey_hall/grid.py
+      M bailey_hall/out/grid_hybrid_0.5m_doors.png
+     … +15 lines (ctrl+o to expand)
+  ⎿  1 file changed (binary, mode only or too large to show)
+
+  Read 1 file (ctrl+o to expand)
+
+● I've marked every stair entrance and exit on grid_hybrid_0.5m_doors.png. Only
+  the drawing changed: the grid itself is the same.
+
+  Balcony stairs (one-way, down only):
+
+  ┌──────────────┬────────────────────┬────────────────────────────────────┐
+  │    Stair     │ Entrance (▼ on the │    Exit (● on the first floor)     │
+  │              │      balcony)      │                                    │
+  ├──────────────┼────────────────────┼────────────────────────────────────┤
+  │ SW           │ Door at (-8.9,     │ West vestibule corner, about (-5,  │
+  │              │ -15.75)            │ -18.75), next to the foyer doors   │
+  ├──────────────┼────────────────────┼────────────────────────────────────┤
+  │ SE           │ Door at (8.9,      │ East vestibule corner, about (5,   │
+  │              │ -15.75)            │ -18.75)                            │
+  ├──────────────┼────────────────────┼────────────────────────────────────┤
+  │ NW / NE      │ BW / BE doors at   │ Not in the graph: people "exit" at │
+  │ (stage side) │ (±17.35, 11.45)    │  the balcony door                  │
+  └──────────────┴────────────────────┴────────────────────────────────────┘
+
+  First-floor stairs (purple, two-way): each ◆ marks a place where people step
+  on or off the stair.
+
+  ┌────────────────────┬──────────┬────────────────────────────────────────┐
+  │       Stair        │  Where   │             On/off points              │
+  ├────────────────────┼──────────┼────────────────────────────────────────┤
+  │                    │ (±4.6,   │ North end, from the main aisle at      │
+  │ Aisle stairs       │ -9.4)    │ (±4.5, -8.0); south end, into the loge │
+  │                    │          │  aisle at (±5.0, -10.25)               │
+  ├────────────────────┼──────────┼────────────────────────────────────────┤
+  │                    │          │ West face, from the loge side aisle at │
+  │ Mid stairs         │ (±10,    │  (±11, -2.0); east face, from the      │
+  │                    │ -2.2)    │ orchestra cross passage at (±9, -2.0); │
+  │                    │          │  south face at (±10, -2.5)             │
+  ├────────────────────┼──────────┼────────────────────────────────────────┤
+  │ Front-corner       │ (±9.4,   │ (±9.25, 8.0) from the orchestra        │
+  │ escape route,      │ 9)       │ corner, and (±9.5, 10.0) onto the      │
+  │ first flight       │          │ landing                                │
+  ├────────────────────┼──────────┼────────────────────────────────────────┤
+  │ Front-corner       │ (±12.3,  │ (±11, 10.75) from the landing, and     │
+  │ escape route,      │ 10.7)    │ (±13.5, 10.75) towards the side-wall   │
+  │ second flight      │          │ door at (±15.25, 11)                   │
+  └────────────────────┴──────────┴────────────────────────────────────────┘
+
+  The markers are worked out from the grid's own steps between cells, so they
+  show where the simulation lets people on and off. They aren't copied from the
+  floor plan.
+
+  Two things look off in the model:
+  - Mid-stair south face: people can step onto each mid stair from the strip of
+    floor just south of it. I suspect the real stair is only entered from its
+    west and east ends. A thin wall already stops people walking around the
+    stair along that strip, so the effect is probably small. Shrinking the stair
+    or adding a wall would fix it if you want.
+  - Swapped names in model.py: stair_mid_W is actually the east mid stair, and
+    stair_mid_E the west one. Nothing uses those names yet, so it's only a
+    labelling bug.
+
+  The marker code is in grid.py, and render_layout(..., highlight_doors=True)
+  now draws them. I didn't touch LED_Simulation.py or run.gif, which have
+  someone else's uncommitted changes.
+
+✻ Cooked for 3m 30s · done 9:19 PM
+
+※ recap: You're building the Bailey Hall evacuation grid, and I just marked all stair entrances and exits on grid_hybrid_0.5m_doors.png. Next, decide whether the first-floor mid stairs should be blocked from their south side.

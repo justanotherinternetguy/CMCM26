@@ -16,14 +16,13 @@ from typing import List, Optional
 
 import numpy as np
 
-from grid import BALCONY, COST_STAIRS, FIRST_FLOOR, LEVEL_NAMES, NODE_SEAT, NODE_WALKWAY, Grid
+from grid import BALCONY, FIRST_FLOOR, LEVEL_NAMES, STAIR_INTERIOR, Grid
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN_PATH = os.path.join(HERE, "out", "run.npz")
 FPS = 30
 
-WALL_COLOR, FLOOR_COLOR, SEAT_COLOR, EXIT_COLOR, STAIR_COLOR = "#3a3f47", "#ece8df", "#bdb6a8", "#2ca02c", "#eff5c6"
 TO_DOOR_COLOR, TO_EXIT_COLOR = "#1f77b4", "#d1495b"
 MANAGER_COLOR, TOLD_BY_MANAGER_COLOR = "#111111", "#8e44ad"
 CLOSED_EXIT_COLOR = "#ff7f0e"
@@ -60,6 +59,8 @@ def animate(grid: Grid, run: dict, path: str):
     from matplotlib.colors import ListedColormap
     from matplotlib.lines import Line2D
 
+    agent_style = dict(s=18, edgecolors="white", linewidths=0.4, zorder=8)
+
     node, exited, to_door = run["node"], run["exited"], run["to_door"]
     told_by_manager = run.get("told_by_manager")
     manager_nodes = run.get("manager_node", np.empty(0, np.int32))
@@ -72,40 +73,19 @@ def animate(grid: Grid, run: dict, path: str):
     figure, axes = plt.subplots(1, 2, figsize=(14, 7.4), dpi=110, constrained_layout=True)
     agent_dots = []
     for level_index, axis in enumerate(axes):
-        axis.imshow(np.where(grid.walkable[level_index], 1.0, np.nan), extent=extent, interpolation="nearest",
-                    cmap=ListedColormap([FLOOR_COLOR]))
-        
-        stair_cells = np.where(grid.walkable[level_index] & (grid.cell_cost[level_index] == COST_STAIRS), 1.0, np.nan)
-        exit_cells = np.where(grid.exit_id[level_index] >= 0, 1.0, np.nan)
-        
-        axis.imshow(stair_cells, extent=extent, interpolation="nearest", cmap=ListedColormap([STAIR_COLOR]))
-        axis.imshow(exit_cells, extent=extent, interpolation="nearest", cmap=ListedColormap([EXIT_COLOR]))
-
+        # The same floor plan as grid_hybrid_<cell>m_doors.png: doors, exits, stairs and stair ends.
+        grid.draw_layout(axis, level_index, highlight_doors=True)
         if closed_cells is not None:
             axis.imshow(np.where(closed_cells[level_index], 1.0, np.nan), extent=extent,
-                        interpolation="nearest", cmap=ListedColormap([CLOSED_EXIT_COLOR]))
-        
-        on_level = grid.node_level == level_index
-        walkway = on_level & (grid.node_kind == NODE_WALKWAY)
-        seat = on_level & (grid.node_kind == NODE_SEAT)
-        
-        axis.scatter(grid.node_x[walkway], grid.node_y[walkway], c=FLOOR_COLOR, s=9, marker="s", linewidths=0)
-        axis.scatter(grid.node_x[seat], grid.node_y[seat], c=SEAT_COLOR, s=7, marker="s", linewidths=0)
-        agent_dots.append(axis.scatter([], [], s=18, linewidths=0, zorder=3))
+                        interpolation="nearest", cmap=ListedColormap([CLOSED_EXIT_COLOR]), zorder=4)
+        agent_dots.append(axis.scatter([], [], **agent_style))
         here = manager_nodes[grid.node_level[manager_nodes] == level_index]
         axis.scatter(grid.node_x[here], grid.node_y[here], c=MANAGER_COLOR, s=90, marker="*",
-                     edgecolors="white", linewidths=0.6, zorder=4)
+                     edgecolors="white", linewidths=0.6, zorder=9)
         axis.set_title(LEVEL_NAMES[level_index].replace("_", " "), fontsize=11)
-        axis.set_xlabel("x east [m]")
-        axis.set_ylabel("y north [m]")
-        axis.set_aspect("equal")
-        axis.set_facecolor(WALL_COLOR)
-        axis.tick_params(length=0, labelsize=8)
-        for spine in axis.spines.values():
-            spine.set_visible(False)
-    legend = [Line2D([], [], marker="o", linestyle="", color=TO_DOOR_COLOR, label="going to auditorium door"),
-              Line2D([], [], marker="o", linestyle="", color=TO_EXIT_COLOR, label="going to building exit"),
-              Line2D([], [], marker="s", linestyle="", color=EXIT_COLOR, label="exit")]
+    legend = grid.layout_legend(highlight_doors=True)
+    legend += [Line2D([], [], marker="o", linestyle="", color=TO_DOOR_COLOR, label="going to auditorium door"),
+               Line2D([], [], marker="o", linestyle="", color=TO_EXIT_COLOR, label="going to building exit")]
     if closed_cells is not None:
         legend.append(Line2D([], [], marker="s", linestyle="", color=CLOSED_EXIT_COLOR, label="closed exit"))
     if len(manager_nodes):
@@ -113,7 +93,7 @@ def animate(grid: Grid, run: dict, path: str):
                           label="redirected by a crowd manager"),
                    Line2D([], [], marker="*", linestyle="", color=MANAGER_COLOR, markersize=10,
                           label="crowd manager")]
-    figure.legend(handles=legend, loc="outside lower center", ncol=len(legend), frameon=False, fontsize=10)
+    figure.legend(handles=legend, loc="outside lower center", ncol=min(len(legend), 5), frameon=False, fontsize=9)
     clock = figure.suptitle("", fontsize=13)
 
     def draw_step(step_index):
@@ -121,7 +101,9 @@ def animate(grid: Grid, run: dict, path: str):
         colors = np.where(to_door[step_index], TO_DOOR_COLOR, TO_EXIT_COLOR)
         if told_by_manager is not None:
             colors = np.where(told_by_manager[step_index], TOLD_BY_MANAGER_COLOR, colors)
-        node_levels = grid.node_level[nodes_now]
+        # Agents on a balcony stair stand on stair-chain nodes, which have their own level.  Draw them
+        # on the first-floor panel at their place along the flight, or they would vanish mid-stair.
+        node_levels = np.where(grid.node_level[nodes_now] == STAIR_INTERIOR, FIRST_FLOOR, grid.node_level[nodes_now])
         for level_index, dots in ((FIRST_FLOOR, agent_dots[0]), (BALCONY, agent_dots[1])):
             shown = inside & (node_levels == level_index)
             dots.set_offsets(np.column_stack([grid.node_x[nodes_now[shown]], grid.node_y[nodes_now[shown]]]))
