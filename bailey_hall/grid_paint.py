@@ -61,14 +61,36 @@ Using a painted file in a simulation
     field = grid.node_distance_field(blocked=blocked)
 
 Saving writes <layout>.npz (arrays) and <layout>.json (a human readable list of every LED and barrier).
+
+When the grid changes
+---------------------
+Paint is stored per lattice cell, so a file only fits the lattice it was painted on.  GridPaint.load
+therefore compares the saved lattice with the current grid:
+
+    same rows and columns, same corner     used as it is.  A different NODE COUNT (stair nodes added, a few
+                                           cells now walkable or not) does not matter: node arrays are rebuilt
+                                           from the cell, seat and walkway flags every time.
+    rows/columns/corner changed            every flag is moved to the cell at the same position in metres
+                                           (a one-line note says how far).  Flags that fall off the new lattice
+                                           are lost; flags on cells that stopped being floor are ignored.
+    different cell size                    cannot be moved; paint it again.
+
+Files saved by this version store the lattice corner (origin_x_m, origin_y_m).  For older files the west edge
+is taken as -(columns / 2) * cell, the way grid.py places it, and the north edge is found by sliding the paint
+north/south until it lies on the new floor and walls; if that is not clear-cut it stops with an error.  Give the
+old corner yourself with GridPaint.load(path, grid, old_origin_m=(x0, y0)) or  --old-origin X Y.
+Per-seat flags are kept only if the number of seats is unchanged.  Open the moved layout in the painter and
+press Save once to store it in the new grid's format.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import json
+import math
 import os
 import re
+import shutil
 import threading
 import webbrowser
 from dataclasses import dataclass
@@ -176,6 +198,88 @@ def find_wall_edges(grid: Grid) -> Tuple[np.ndarray, np.ndarray]:
     return horizontal_wall, vertical_wall
 
 
+# ------------------------------------------------------ moving paint to a changed grid --
+SEARCH_NORTH_SOUTH_M = 40.0      # how far old paint is slid north/south when the old north edge is unknown
+MIN_OVERLAP_FRACTION = 0.9       # share of painted cells and wall edges that must land on the new floor and walls
+
+
+def is_seat_layer(layer_name: str) -> bool:
+    return layer_name.startswith(("seat_", "walkway_"))
+
+
+def shift_flags(flags: np.ndarray, new_shape: Tuple[int, ...], row_shift: int, column_shift: int) -> np.ndarray:
+    """Copy a (levels, rows, columns) flag array into a new array of `new_shape`, moving every flag by
+    (row_shift, column_shift) cells.  Positive shifts go south and east.  Flags that land outside are lost."""
+    moved = np.zeros(new_shape, bool)
+    old_rows, old_columns = flags.shape[1:]
+    new_rows, new_columns = new_shape[1:]
+    first_row, last_row = max(0, row_shift), min(new_rows, old_rows + row_shift)
+    first_column, last_column = max(0, column_shift), min(new_columns, old_columns + column_shift)
+    if last_row > first_row and last_column > first_column:
+        moved[:, first_row:last_row, first_column:last_column] = flags[
+            :, first_row - row_shift:last_row - row_shift, first_column - column_shift:last_column - column_shift]
+    return moved
+
+
+def origin_shift(old_origin_m: Tuple[float, float], grid: Grid) -> Tuple[int, int]:
+    """(row_shift, column_shift) that carries a cell of the old lattice to the cell at the same place in metres."""
+    column_shift = (old_origin_m[0] - grid.x0) / grid.cell
+    row_shift = (grid.y0 - old_origin_m[1]) / grid.cell
+    if not (math.isclose(column_shift, round(column_shift), abs_tol=1e-6)
+            and math.isclose(row_shift, round(row_shift), abs_tol=1e-6)):
+        raise ValueError(f"the old lattice corner {old_origin_m} is not a whole number of {grid.cell:g} m cells "
+                         f"away from the new one ({grid.x0:g}, {grid.y0:g}), so the paint cannot be moved cell for cell")
+    return int(round(row_shift)), int(round(column_shift))
+
+
+def find_row_shift(saved: Dict[str, np.ndarray], grid: Grid, column_shift: int,
+                   wall_edges: Tuple[np.ndarray, np.ndarray], path: str) -> int:
+    """Old file without a stored corner: slide the paint north/south until it sits on the new floor and walls."""
+    shapes = layer_shapes(grid)
+    horizontal_wall, vertical_wall = wall_edges
+    painted_cells = saved["cell_has_led"] | saved["cell_is_barrier"]
+    painted_horizontal = saved["wall_has_led_horizontal"]
+    painted_vertical = saved["wall_has_led_vertical"]
+    total = int(painted_cells.sum() + painted_horizontal.sum() + painted_vertical.sum())
+    if total == 0:
+        return 0                                     # no cells or walls to line up; only seat flags may exist
+    reach = int(math.ceil(SEARCH_NORTH_SOUTH_M / grid.cell))
+    candidates = list(range(-reach, reach + 1))
+    hits = []
+    for row_shift in candidates:
+        moved_cells = shift_flags(painted_cells, shapes["cell_has_led"], row_shift, column_shift)
+        moved_horizontal = shift_flags(painted_horizontal, shapes["wall_has_led_horizontal"], row_shift, column_shift)
+        moved_vertical = shift_flags(painted_vertical, shapes["wall_has_led_vertical"], row_shift, column_shift)
+        hits.append(int((moved_cells & grid.walkable).sum() + (moved_horizontal & horizontal_wall).sum()
+                        + (moved_vertical & vertical_wall).sum()))
+    hits = np.array(hits)
+    best = int(hits.argmax())
+    runner_up = int(np.delete(hits, best).max()) if len(hits) > 1 else 0
+    guessed_x0 = -(saved["cell_has_led"].shape[2] // 2) * grid.cell
+    how_to_fix = (f"Tell it where the old grid's north-west corner was: GridPaint.load(path, grid, "
+                  f"old_origin_m=({guessed_x0:g}, <old north edge y in metres>)), or  --old-origin {guessed_x0:g} <y>.")
+    if hits[best] < MIN_OVERLAP_FRACTION * total:
+        raise ValueError(f"{path} was painted on a different grid and does not line up with this one: at the best "
+                         f"north/south shift only {int(hits[best])} of {total} painted cells and wall edges land on "
+                         f"the new floor and walls. {how_to_fix}")
+    if hits[best] - runner_up < max(1, 0.02 * total):
+        raise ValueError(f"{path} was painted on a different grid and could fit the new one at more than one "
+                         f"north/south shift (best {int(hits[best])} and {runner_up} of {total}). {how_to_fix}")
+    return candidates[best]
+
+
+def shifted_layers(saved: Dict[str, np.ndarray], grid: Grid, row_shift: int, column_shift: int) -> Dict[str, np.ndarray]:
+    """Every saved layer on this grid's lattice.  Per-seat layers are kept only if the seat count is unchanged."""
+    shapes = layer_shapes(grid)
+    layers = {}
+    for name in LAYER_NAMES:
+        if is_seat_layer(name):
+            layers[name] = saved[name] if saved[name].shape == shapes[name] else np.zeros(shapes[name], bool)
+        else:
+            layers[name] = shift_flags(saved[name], shapes[name], row_shift, column_shift)
+    return layers
+
+
 # --------------------------------------------------------------------- paint --
 @dataclass
 class GridPaint:
@@ -258,6 +362,7 @@ class GridPaint:
         temporary_path = path + ".tmp.npz"
         np.savez_compressed(
             temporary_path, paint_format_version=PAINT_FORMAT_VERSION, cell_size_m=grid.cell,
+            origin_x_m=grid.x0, origin_y_m=grid.y0,      # west edge of column 0, north edge of row 0
             grid_shape=np.array(grid.shape), num_nodes=grid.num_nodes,
             node_has_led=self.node_has_led(grid), node_is_barrier=self.node_is_barrier(grid),
             **{name: getattr(self, name) for name in LAYER_NAMES})
@@ -266,14 +371,64 @@ class GridPaint:
             json.dump(summarize(grid, self), summary_file, indent=1)
 
     @classmethod
-    def load(cls, path: str, grid: Grid) -> "GridPaint":
+    def load(cls, path: str, grid: Grid, old_origin_m: Optional[Tuple[float, float]] = None,
+             wall_edges: Optional[Tuple[np.ndarray, np.ndarray]] = None, verbose: bool = True) -> "GridPaint":
+        """Open a paint file on `grid`, moving the paint onto the current lattice if the grid has changed.
+
+        old_origin_m=(x0, y0) is the old lattice's west and north edge in metres; it is used only for files
+        that did not store their own corner.  wall_edges (from find_wall_edges) saves recomputing them.
+        verbose=False silences the note printed when paint had to be moved.  See the module docstring."""
         with np.load(path, allow_pickle=False) as archive:
             if "paint_format_version" not in archive.files or int(archive["paint_format_version"]) != PAINT_FORMAT_VERSION:
                 raise ValueError(f"{path} is not a paint file this version can read")
-            if tuple(archive["grid_shape"].tolist()) != tuple(grid.shape) or int(archive["num_nodes"]) != grid.num_nodes \
-                    or not np.isclose(float(archive["cell_size_m"]), grid.cell):
-                raise ValueError(f"{path} was painted on a different grid (shape, cell size or node count differ)")
-            paint = cls.from_layers({name: archive[name] for name in LAYER_NAMES}, grid)
+            saved = {name: np.asarray(archive[name]).astype(bool) for name in LAYER_NAMES}
+            saved_cell = float(archive["cell_size_m"])
+            saved_origin = ((float(archive["origin_x_m"]), float(archive["origin_y_m"]))
+                            if "origin_x_m" in archive.files else None)
+        if not np.isclose(saved_cell, grid.cell):
+            raise ValueError(f"{path} was painted with {saved_cell:g} m cells but this grid uses {grid.cell:g} m; "
+                             "paint it again at the new cell size")
+        saved_shape = tuple(saved["cell_has_led"].shape)
+        new_shape = tuple(grid.shape)
+        if saved_shape[0] != new_shape[0]:
+            raise ValueError(f"{path} has {saved_shape[0]} levels but this grid has {new_shape[0]}")
+        if saved_origin is None and old_origin_m is not None:
+            saved_origin = (float(old_origin_m[0]), float(old_origin_m[1]))
+
+        if saved_origin is not None:
+            row_shift, column_shift = origin_shift(saved_origin, grid)
+        elif saved_shape == new_shape:
+            row_shift = column_shift = 0                      # old file, same lattice: assume the corner is unchanged
+        else:
+            column_shift = (new_shape[2] // 2) - (saved_shape[2] // 2)       # grid.py puts x = 0 on a cell edge
+            row_shift = find_row_shift(saved, grid, column_shift, wall_edges or find_wall_edges(grid), path)
+
+        paint = cls.from_layers(shifted_layers(saved, grid, row_shift, column_shift), grid)
+
+        if verbose:
+            notes = []
+            if saved_shape != new_shape or row_shift or column_shift:
+                lost = sum(int(saved[name].sum()) - int(getattr(paint, name).sum())
+                           for name in LAYER_NAMES if not is_seat_layer(name))
+                notes.append(f"lattice {saved_shape[1]}x{saved_shape[2]} -> {new_shape[1]}x{new_shape[2]}, paint moved "
+                             f"{row_shift:+d} rows (+ = south) and {column_shift:+d} columns (+ = east)"
+                             + (f", {lost} flags fell off the new lattice" if lost else ""))
+            if saved["seat_has_led"].shape != layer_shapes(grid)["seat_has_led"]:
+                notes.append(f"the seat count changed ({saved['seat_has_led'].shape[0]} -> {len(grid.spawn)}), "
+                             "so the per-seat and row-walkway flags were dropped")
+            painted_total = (int((paint.cell_has_led | paint.cell_is_barrier).sum())
+                             + int(paint.wall_has_led_horizontal.sum()) + int(paint.wall_has_led_vertical.sum()))
+            if painted_total:
+                horizontal_wall, vertical_wall = wall_edges or find_wall_edges(grid)
+                on_grid = (int(((paint.cell_has_led | paint.cell_is_barrier) & grid.walkable).sum())
+                           + int((paint.wall_has_led_horizontal & horizontal_wall).sum())
+                           + int((paint.wall_has_led_vertical & vertical_wall).sum()))
+                if on_grid < MIN_OVERLAP_FRACTION * painted_total:
+                    notes.append(f"only {on_grid} of {painted_total} painted cells and wall edges lie on the current floor "
+                                 "and walls; open it in the painter and check it")
+            if notes:
+                print(f"{path}: the grid has changed since this was painted:\n  " + "\n  ".join(notes)
+                      + "\n  Open it in the painter and press Save to store it for the new grid.")
         return paint
 
 
@@ -347,7 +502,7 @@ def layout_summary_path(layouts_dir: str, name: str) -> str:
     return os.path.join(layouts_dir, name + ".json")
 
 
-def list_layouts(grid: Grid, layouts_dir: str) -> List[dict]:
+def list_layouts(grid: Grid, layouts_dir: str, wall_edges=None, old_origin_m=None) -> List[dict]:
     """Every layout file in the folder, with its counts (or the reason it cannot be read on this grid)."""
     items = []
     if not os.path.isdir(layouts_dir):
@@ -361,21 +516,22 @@ def list_layouts(grid: Grid, layouts_dir: str) -> List[dict]:
         path = os.path.join(layouts_dir, file_name)
         item = dict(name=name, modified=os.path.getmtime(path))
         try:
-            item.update(ok=True, counts=paint_counts(grid, GridPaint.load(path, grid)))
+            paint = GridPaint.load(path, grid, old_origin_m=old_origin_m, wall_edges=wall_edges, verbose=False)
+            item.update(ok=True, counts=paint_counts(grid, paint))
         except Exception as problem:
             item.update(ok=False, error=f"{type(problem).__name__}: {problem}")
         items.append(item)
     return items
 
 
-def import_legacy_paint(grid: Grid, wall_edges, layouts_dir: str) -> bool:
+def import_legacy_paint(grid: Grid, wall_edges, layouts_dir: str, old_origin_m=None) -> bool:
     """Copy the old single paint file (out/grid_paint_<cell>m.npz) in as the layout "default", once."""
     legacy_path = os.path.join(HERE, "out", f"grid_paint_{grid.cell:g}m.npz")
     target_path = layout_path(layouts_dir, DEFAULT_LAYOUT_NAME)
     if os.path.exists(target_path) or not os.path.exists(legacy_path):
         return False
     try:
-        paint = GridPaint.load(legacy_path, grid)
+        paint = GridPaint.load(legacy_path, grid, old_origin_m=old_origin_m, wall_edges=wall_edges)
         paint.clip_to_grid(grid, wall_edges)
         paint.save(target_path, grid)
     except ValueError as problem:
@@ -511,10 +667,11 @@ def add_layout_bar(html_text: str) -> str:
 
 # -------------------------------------------------------------------- server --
 class PaintServer(ThreadingHTTPServer):
-    def __init__(self, address, grid: Grid, wall_edges, layouts_dir: str, layout_name: str):
+    def __init__(self, address, grid: Grid, wall_edges, layouts_dir: str, layout_name: str, old_origin_m=None):
         super().__init__(address, PaintRequestHandler)
         self.grid = grid
         self.wall_edges = wall_edges
+        self.old_origin_m = old_origin_m            # corner of the old lattice, for files that did not store theirs
         self.layouts_dir = layouts_dir
         self.current_layout = layout_name           # the layout the page's Save button writes to
         self.lock = threading.Lock()
@@ -526,7 +683,7 @@ class PaintServer(ThreadingHTTPServer):
         path = layout_path(self.layouts_dir, name)
         if not os.path.exists(path):
             return GridPaint.empty(self.grid)
-        paint = GridPaint.load(path, self.grid)
+        paint = GridPaint.load(path, self.grid, old_origin_m=self.old_origin_m, wall_edges=self.wall_edges)
         paint.clip_to_grid(self.grid, self.wall_edges)
         return paint
 
@@ -543,7 +700,7 @@ class PaintServer(ThreadingHTTPServer):
 
     def layouts_info(self) -> dict:
         return dict(ok=True, current=self.current_layout, dir=self.layouts_dir,
-                    layouts=list_layouts(self.grid, self.layouts_dir))
+                    layouts=list_layouts(self.grid, self.layouts_dir, self.wall_edges, self.old_origin_m))
 
 
 class PaintRequestHandler(BaseHTTPRequestHandler):
@@ -615,6 +772,11 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
         paint = GridPaint.from_layers(layers, grid)
         dropped = paint.clip_to_grid(grid, server.wall_edges)
         path = layout_path(server.layouts_dir, name)
+        if os.path.exists(path):
+            try:
+                GridPaint.load(path, grid, old_origin_m=server.old_origin_m, wall_edges=server.wall_edges, verbose=False)
+            except ValueError:
+                shutil.copy2(path, path + ".bak")      # it does not fit this grid; keep the original before replacing it
         paint.save(path, grid)
         server.current_layout = name
         return dict(ok=True, name=name, path=path, summaryPath=layout_summary_path(server.layouts_dir, name),
@@ -690,6 +852,9 @@ def main():
     parser.add_argument("--layout", default=DEFAULT_LAYOUT_NAME,
                         help=f"layout to open first and save to (default: {DEFAULT_LAYOUT_NAME}); "
                              "a name that does not exist yet starts an empty layout")
+    parser.add_argument("--old-origin", type=float, nargs=2, metavar=("X", "Y"),
+                        help="west edge x and north edge y (metres) of the lattice that older layout files were "
+                             "painted on, if the grid has changed and those files did not store it")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="do not open the page automatically")
     arguments = parser.parse_args()
@@ -700,11 +865,12 @@ def main():
     os.makedirs(layouts_dir, exist_ok=True)
     layout_name = check_layout_name(arguments.layout)
 
-    import_legacy_paint(grid, wall_edges, layouts_dir)
+    old_origin_m = tuple(arguments.old_origin) if arguments.old_origin else None
+    import_legacy_paint(grid, wall_edges, layouts_dir, old_origin_m)
 
-    server = PaintServer(("127.0.0.1", arguments.port), grid, wall_edges, layouts_dir, layout_name)
+    server = PaintServer(("127.0.0.1", arguments.port), grid, wall_edges, layouts_dir, layout_name, old_origin_m)
 
-    saved_layouts = list_layouts(grid, layouts_dir)
+    saved_layouts = list_layouts(grid, layouts_dir, wall_edges, old_origin_m)
     print(f"layouts folder {layouts_dir}: " + (", ".join(item["name"] for item in saved_layouts) or "no saved layouts yet"))
     if os.path.exists(layout_path(layouts_dir, layout_name)):
         try:
