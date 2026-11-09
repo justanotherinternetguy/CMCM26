@@ -1,14 +1,12 @@
 """
-the idea is Simulation.py will save a snapshot (deep copy) of agents[] every timestep. we save the node of each agent, whether it has exited
-the entire building, and whether it is still moving towards an auditorium door
-
+Simulation.py saves a snapshot of the agents every timestep: the node of each agent, whether it has
+exited the building, and whether it is still heading for an auditorium door.
 
 to use:
 animate.py [run.npz]
 """
 
 from __future__ import annotations
-from matplotlib.animation import PillowWriter
 
 import os
 import sys
@@ -22,6 +20,8 @@ from grid import BALCONY, FIRST_FLOOR, LEVEL_NAMES, STAIR_INTERIOR, Grid
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN_PATH = os.path.join(HERE, "out", "run.npz")
 FPS = 30
+FRAME_STRIDE = 3    # render every Nth simulation step
+DPI = 80
 
 TO_DOOR_COLOR, TO_EXIT_COLOR = "#1f77b4", "#d1495b"
 MANAGER_COLOR, TOLD_BY_MANAGER_COLOR = "#111111", "#8e44ad"
@@ -36,7 +36,7 @@ def save_run(path: str, grid: Grid, frames: List[dict], step_seconds: float,
     if manager_nodes is not None:
         extra["manager_node"] = np.asarray(manager_nodes, np.int32)
     if closed_exit_cells is not None and np.any(closed_exit_cells):
-            extra["closed_exit_cells"] = np.asarray(closed_exit_cells, bool)
+        extra["closed_exit_cells"] = np.asarray(closed_exit_cells, bool)
     if frames and all("manager" in frame for frame in frames):
         extra["told_by_manager"] = np.stack([frame["manager"] for frame in frames])
     np.savez_compressed(path, cell_m=grid.cell_m, num_nodes=grid.num_nodes, step_seconds=step_seconds,
@@ -58,6 +58,8 @@ def animate(grid: Grid, run: dict, path: str):
     from matplotlib.animation import FFMpegWriter, FuncAnimation
     from matplotlib.colors import ListedColormap
     from matplotlib.lines import Line2D
+    import imageio_ffmpeg
+    matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
     agent_style = dict(s=18, edgecolors="white", linewidths=0.4, zorder=8)
 
@@ -70,10 +72,9 @@ def animate(grid: Grid, run: dict, path: str):
     _, num_rows, num_columns = grid.shape
     extent = (grid.x0, grid.x0 + num_columns * grid.cell, grid.y0 - num_rows * grid.cell, grid.y0)
 
-    figure, axes = plt.subplots(1, 2, figsize=(14, 7.4), dpi=110, constrained_layout=True)
+    figure, axes = plt.subplots(1, 2, figsize=(14, 7.4), dpi=DPI, constrained_layout=True)
     agent_dots = []
     for level_index, axis in enumerate(axes):
-        # The same floor plan as grid_hybrid_<cell>m_doors.png: doors, exits, stairs and stair ends.
         grid.draw_layout(axis, level_index, highlight_doors=True)
         if closed_cells is not None:
             axis.imshow(np.where(closed_cells[level_index], 1.0, np.nan), extent=extent,
@@ -101,8 +102,8 @@ def animate(grid: Grid, run: dict, path: str):
         colors = np.where(to_door[step_index], TO_DOOR_COLOR, TO_EXIT_COLOR)
         if told_by_manager is not None:
             colors = np.where(told_by_manager[step_index], TOLD_BY_MANAGER_COLOR, colors)
-        # Agents on a balcony stair stand on stair-chain nodes, which have their own level.  Draw them
-        # on the first-floor panel at their place along the flight, or they would vanish mid-stair.
+        # Agents on a balcony stair stand on stair-chain nodes with their own level; draw them on the
+        # first-floor panel at their place along the flight, or they would vanish mid-stair.
         node_levels = np.where(grid.node_level[nodes_now] == STAIR_INTERIOR, FIRST_FLOOR, grid.node_level[nodes_now])
         for level_index, dots in ((FIRST_FLOOR, agent_dots[0]), (BALCONY, agent_dots[1])):
             shown = inside & (node_levels == level_index)
@@ -112,23 +113,19 @@ def animate(grid: Grid, run: dict, path: str):
                        f"{int(exited[step_index].sum())} of {num_agents} out")
         return agent_dots
 
-    animation = FuncAnimation(figure, draw_step, frames=len(node), blit=False)
-    # animation.save(path, writer=FFMpegWriter(fps=FPS),
-    #                progress_callback=lambda done, total: print(f"\r  frame {done + 1}/{total}", end="", flush=True))
+    frame_ids = sorted(set(range(0, len(node), FRAME_STRIDE)) | {len(node) - 1})
+    animation = FuncAnimation(figure, draw_step, frames=frame_ids, blit=False)
     animation.save(
-    path.replace(".mp4", ".gif"),  # Update extension to .gif
-    writer=PillowWriter(fps=FPS),
-    progress_callback=lambda done, total: print(
-        f"\r  frame {done + 1}/{total}", end="", flush=True
-    ),
-)
+        path,
+        writer=FFMpegWriter(fps=FPS, codec="libx264",
+                            extra_args=["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]),
+        progress_callback=lambda done, total: print(f"\r  frame {done + 1}/{total}", end="", flush=True),
+    )
     print()
     plt.close(figure)
 
 
 if __name__ == "__main__":
-    
-    
     run_path = sys.argv[1] if len(sys.argv) > 1 else RUN_PATH
     run = load_run(run_path)
     output_path = os.path.splitext(run_path)[0] + ".mp4"

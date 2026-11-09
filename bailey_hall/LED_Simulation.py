@@ -18,6 +18,9 @@ RANDOM_SEED = 4
 MAX_STEPS = 5000
 EXIT_PROXIMITY_RADIUS_M = 1
 
+# When fewer than this many people are still inside, they head straight for the closest exit they know of.
+RUSH_EXIT_BELOW_COUNT = 5
+
 # Alarm-to-first-movement delay, including immediate seat-neighbor influence.
 RESPONSE_TIME_ENABLED = True
 RESPONSE_LOG_MEAN = 3.93
@@ -44,8 +47,8 @@ CLOSED_EXIT_LABELS = ()
 DISCOVERY_RADIUS_M = 4.0          #distance at which an agent notices a closed exit
 LED_KNOWS_CLOSURES = False
 
-LED_ENABLED = False
-LED_STRENGTH = 10.0
+LED_ENABLED = True
+LED_STRENGTH = 20.0
 LED_TRUST_DECAY = 0.08    # trust = exp(-decay * (independence - 1))
 LED_RELAX_WEIGHT = 0.5
 LED_VIEW_SCALE_M = 4.0
@@ -59,7 +62,7 @@ LED_INDEPENDENCE_GAIN = 1.7     # LED independence is multiplied by this for eve
 # The chance is a rate per second: it is
 # CROWD_MANAGER_MAX_SWITCH_RATE_PER_S right next to the manager and falls linearly to 0 at the radius,
 # so the longer someone stays close (e.g. stuck in a queue), the more likely they are to be redirected.
-CROWD_MANAGER_RADIUS_M = 0.0
+CROWD_MANAGER_RADIUS_M = 4.0
 CROWD_MANAGER_MAX_SWITCH_RATE_PER_S = 1.0
 ATTENDEES_PER_CROWD_MANAGER = 250    # NY State Fire Code: at least one manager per 250 attendees
 
@@ -73,7 +76,7 @@ class CrowdManagerPost:
     target_exit_label: str # target exit that this manager will send everyone tos
 
 # placement of crowd managers
-CROWD_MANAGER_POSTS = (
+CROWD_MANAGER_POSTS_DEFAULT = (
     CrowdManagerPost("orchestra front W", FIRST_FLOOR, -8.0, 7.5, "SW"),
     CrowdManagerPost("orchestra front E", FIRST_FLOOR, 8.0, 7.5, "SE"),
     CrowdManagerPost("corridor W", FIRST_FLOOR, -17.0, -4.0, "PW"),
@@ -81,6 +84,18 @@ CROWD_MANAGER_POSTS = (
     CrowdManagerPost("balcony W", BALCONY, -17.5, -2.0, "BW"),
     CrowdManagerPost("balcony E", BALCONY, 17.5, -2.0, "BE"),
 )
+
+CROWD_MANAGER_POSTS_OPTIMIZED = (
+    CrowdManagerPost("mid cross W", FIRST_FLOOR, -10.0, -2.0, "PW"),
+    CrowdManagerPost("rear ring E", FIRST_FLOOR, 11.0, -14.5, "PE"),
+    CrowdManagerPost("side corridor W", FIRST_FLOOR, -17.0, -4.0, "PW"),
+    CrowdManagerPost("side corridor E", FIRST_FLOOR, 17.0, -4.0, "PE"),
+    CrowdManagerPost("lobby", FIRST_FLOOR, 0.0, -21.0, "F3"),
+    CrowdManagerPost("mid cross E", FIRST_FLOOR, 10.0, -2.0, "PE"),
+)
+
+
+CROWD_MANAGER_POSTS=CROWD_MANAGER_POSTS_OPTIMIZED
 
 MAIN_ENTRANCE_LABELS = ("F1", "F2", "F3", "F4", "F5")
 
@@ -426,6 +441,7 @@ class Agents:
     led_trust: np.ndarray
     led_guided: np.ndarray
     follows_manager: np.ndarray
+    rushing: np.ndarray                 # one of the last few people inside: going straight to the closest known exit
 
     @property
     def num_agents(self) -> int:
@@ -497,6 +513,7 @@ def spawn_agents(grid: Grid, profile: AudienceProfile, random_generator: np.rand
         led_trust=led_trust,
         led_guided=np.zeros(num_seats, bool),
         follows_manager=np.zeros(num_seats, bool),
+        rushing=np.zeros(num_seats, bool),
     )
 
     occupant_at_node = np.full(grid.num_nodes, -1, np.int32)
@@ -750,6 +767,30 @@ def discover_closed_exits(agents: Agents, discovery_distance: np.ndarray, door_b
                            door_to_exit_costs, exit_costs)
     return len(learners)
 
+
+def rush_remaining_agents(agents: Agents, door_costs: np.ndarray, door_to_exit_costs: np.ndarray,
+                          exit_costs: np.ndarray, all_exit_rows: np.ndarray,
+                          uninformed_exit_rows: np.ndarray, exit_labels: List[str]) -> None:
+    """Once fewer than RUSH_EXIT_BELOW_COUNT people are inside, each heads for the closest exit they know of."""
+    inside = np.flatnonzero(~agents.has_exited)
+    if inside.size == 0 or inside.size >= RUSH_EXIT_BELOW_COUNT:
+        return
+    for agent_id in inside:
+        known_closed = agents.knows_closed[agent_id]
+        rows = all_exit_rows if agents.knows_all_exits[agent_id] else uninformed_exit_rows
+        rows = rows[~known_closed[rows]]
+        if rows.size == 0:
+            rows = all_exit_rows[~known_closed]
+        node = agents.current_node[agent_id]
+        costs = exit_costs[rows, node]
+        if rows.size == 0 or not np.isfinite(costs).any():
+            continue
+        target = int(rows[np.argmin(costs)])
+        agents.rushing[agent_id] = True
+        send_agent_to_exit(agents, agent_id, target, exit_labels[target], door_costs,
+                           door_to_exit_costs, exit_costs)
+
+
 def apply_crowd_managers(agents: Agents, managers: Optional[CrowdManagers], door_costs: np.ndarray,
                          door_to_exit_costs: np.ndarray, exit_costs: np.ndarray,
                          random_generator: np.random.Generator, step_seconds: float) -> int:
@@ -765,7 +806,7 @@ def apply_crowd_managers(agents: Agents, managers: Optional[CrowdManagers], door
     in_range = np.isfinite(distance_to_nearest) & np.isfinite(exit_costs[new_exit_rows, nodes])
     closeness = np.where(in_range, 1.0 - distance_to_nearest / managers.radius_m, 0.0)
     switch_probability = 1.0 - np.exp(-managers.max_switch_rate_per_s * closeness * step_seconds)
-    told = in_range & (random_generator.random(len(inside)) < switch_probability)
+    told = in_range & ~agents.rushing[inside] & (random_generator.random(len(inside)) < switch_probability)
 
     num_switched = 0
     for position in np.flatnonzero(told):
@@ -798,7 +839,7 @@ def reevaluate_targets(agents: Agents, door_costs: np.ndarray, door_to_exit_cost
                        random_generator: np.random.Generator, step_number: int,
                        nearby_exit_rows: np.ndarray) -> None:
     step_seconds = CELL_M / MAX_WALKING_SPEED_M_PER_S
-    is_due = ((~agents.has_exited) & (step_number * step_seconds >= agents.response_time)
+    is_due = ((~agents.has_exited) & ~agents.rushing & (step_number * step_seconds >= agents.response_time)
               & ((step_number + np.arange(agents.num_agents)) % REEVALUATE_EVERY_STEPS == 0))
     for agent_id in np.nonzero(is_due)[0]:
         node = agents.current_node[agent_id]
@@ -907,6 +948,8 @@ if __name__ == "__main__":
         num_discoveries += discover_closed_exits(agents, discovery_distance, door_blocked_by_exit, door_costs,
                                                  door_to_exit_costs, exit_costs, all_exit_rows,
                                                  uninformed_exit_rows, fields.exit_labels)
+        rush_remaining_agents(agents, door_costs, door_to_exit_costs, exit_costs, all_exit_rows,
+                              uninformed_exit_rows, fields.exit_labels)
         reevaluate_targets(agents, door_costs, door_to_exit_costs, exit_costs, exit_goal_cost, all_exit_rows,
                            uninformed_exit_rows, occupant_at_node, random_generator, step_number,
                            nearby_exit_rows)
