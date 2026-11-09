@@ -24,7 +24,7 @@ from typing import Dict, List
 
 import numpy as np
 
-import LED_Simulation as sim
+import LED_Simulation_writeup as sim     # LED_Simulation.py (84c507f upload) lost the run harness
 import optimize as opt
 from barriers import barrier_nodes
 

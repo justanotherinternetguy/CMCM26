@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-import LED_Simulation as sim
+import LED_Simulation_writeup as sim     # LED_Simulation.py (84c507f upload) lost build_scenario/run_simulation
 from grid import NODE_CELL, NODE_SEAT, NODE_STAIR, NODE_WALKWAY, BALCONY, FIRST_FLOOR
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -204,7 +204,7 @@ STATE: dict = {}
 
 
 def setup_state(args) -> None:
-    scenario = sim.build_scenario(closed_exit_labels=args.closed_exit or ())
+    scenario = sim.build_scenario(closed_exit_labels=args.closed_exit or (), barriers_enabled=args.barriers)
     builder = StripBuilder(scenario, args.band_half_width)
     manager_spots, strip_spots = MANAGER_SPOTS, LED_START_SPOTS
     if args.mode in ("managers", "candidates"):
@@ -326,7 +326,8 @@ def make_config(kind: str, items: Sequence[str], fixed: Sequence[str]) -> Config
 
 
 def greedy(kind: str, evaluator: Evaluator, initial: List[str], fixed: List[str], pool_ids: List[str],
-           max_items: int, swap_passes: int, shortlist: int = 0) -> Tuple[List[str], List[dict]]:
+           max_items: int, swap_passes: int, shortlist: int = 0,
+           deadline: float = 0.0) -> Tuple[List[str], List[dict]]:
     selected = list(initial)
     config = make_config(kind, selected, fixed)
     evaluator.run([config], evaluator.seeds)
@@ -337,10 +338,15 @@ def greedy(kind: str, evaluator: Evaluator, initial: List[str], fixed: List[str]
         used = {spot_of(kind, i) for i in chosen}
         return [i for i in pool_ids if i not in chosen and spot_of(kind, i) not in used]
 
+    last_step_s = 0.0
     for step in range(1, max_items + 1):
         options = allowed(selected)
         if not options:
             break
+        if deadline and time.time() + last_step_s > deadline:
+            print(f"deadline: stopping before step {step} (last step took {last_step_s:.0f} s)", flush=True)
+            break
+        step_started = time.time()
         print(f"step {step}: trying {len(options)} candidates", flush=True)
         configs = {make_config(kind, selected + [i], fixed): i for i in options}
         best, stats, ranked = evaluator.best_of(list(configs))
@@ -350,9 +356,12 @@ def greedy(kind: str, evaluator: Evaluator, initial: List[str], fixed: List[str]
         selected.append(configs[best])
         steps.append(dict(step=step, added=configs[best], selected=list(selected), **stats))
         print_step(kind, steps[-1])
+        last_step_s = time.time() - step_started
 
     num_initial = len(initial)
     for swap_pass in range(swap_passes):
+        if deadline and time.time() > deadline:
+            break
         current = make_config(kind, selected, fixed)
         current_score = evaluator.stats(current, evaluator.seeds)["score"]
         changed = False
@@ -481,7 +490,7 @@ def plot_layout(manager_ids: Sequence[str], strip_ids: Sequence[str], path: str,
 
 
 def write_outputs(kind: str, args, selected_managers, selected_strips, steps, evaluator) -> str:
-    folder = os.path.join(OUT_DIR, f"{kind}_{time.strftime('%Y%m%d-%H%M%S')}")
+    folder = os.path.join(OUT_DIR, f"{args.tag or kind}_{time.strftime('%Y%m%d-%H%M%S')}")
     os.makedirs(folder, exist_ok=True)
     final = make_config("managers", selected_managers, selected_strips)
     result = dict(kind=kind, args=vars(args), seeds=evaluator.seeds, num_runs=evaluator.num_runs,
@@ -545,6 +554,10 @@ def parse_args():
     parser.add_argument("--cost-per-item", type=float, default=0.0, help="seconds added to the score per item")
     parser.add_argument("--cost-per-metre", type=float, default=0.0, help="seconds added per metre of LED")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
+    parser.add_argument("--barriers", action="store_true", help="use the barriers painted in grid_paint")
+    parser.add_argument("--deadline", type=float, default=0.0,
+                        help="unix time; no greedy step is started that would likely end after it")
+    parser.add_argument("--tag", default="", help="output folder name prefix (default: the mode)")
     args = parser.parse_args()
     if args.mode == "evaluate" and args.seeds:
         args.confirm_seeds = args.screen_seeds = args.seeds
@@ -593,7 +606,7 @@ def main():
             print(json.dumps(dict(**describe(managers, strips), stats=stats), indent=1, default=float))
             return
         selected, steps = greedy(kind, evaluator, initial, fixed, pool_ids, args.max_items, args.swap_passes,
-                               args.shortlist)
+                               args.shortlist, args.deadline)
     managers, strips = (selected, fixed) if kind == "managers" else (fixed, selected)
     folder = write_outputs(kind, args, managers, strips, steps, evaluator)
     print(f"{evaluator.num_runs} simulations; results in {folder}")

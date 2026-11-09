@@ -1,0 +1,336 @@
+{
+ "kind": "managers",
+ "args": {
+  "mode": "managers",
+  "profile": "concert",
+  "metric": "t100",
+  "max_items": 6,
+  "swap_passes": 0,
+  "start": "none",
+  "managers": "current",
+  "leds": "none",
+  "config": null,
+  "keep_painted_leds": false,
+  "closed_exit": null,
+  "screen_seeds": 8,
+  "confirm_seeds": 32,
+  "confirm_top": 3,
+  "shortlist": 10,
+  "seeds": null,
+  "seed0": 1000,
+  "exits_per_spot": 2,
+  "top_spots": 8,
+  "band_half_width": 1.0,
+  "cost_per_item": 0.0,
+  "cost_per_metre": 0.0,
+  "workers": 16,
+  "barriers": false,
+  "deadline": 1794191232.0,
+  "tag": "managers6"
+ },
+ "seeds": [
+  1000,
+  1001,
+  1002,
+  1003,
+  1004,
+  1005,
+  1006,
+  1007,
+  1008,
+  1009,
+  1010,
+  1011,
+  1012,
+  1013,
+  1014,
+  1015,
+  1016,
+  1017,
+  1018,
+  1019,
+  1020,
+  1021,
+  1022,
+  1023,
+  1024,
+  1025,
+  1026,
+  1027,
+  1028,
+  1029,
+  1030,
+  1031
+ ],
+ "num_runs": 800,
+ "final": {
+  "mean": 218.984375,
+  "ci95": 3.850014032690702,
+  "score": 218.984375,
+  "t100": 218.984375,
+  "t95": 183.14732142857144,
+  "t90": 164.69866071428572,
+  "told_by_manager": 901.1875,
+  "exit_counts": {
+   "BE": 61.0,
+   "BW": 61.0,
+   "F1": 34.7,
+   "F2": 53.6,
+   "F3": 140.3,
+   "F4": 47.3,
+   "F5": 24.4,
+   "PE": 482.2,
+   "PW": 424.6
+  },
+  "num_seeds": 32
+ },
+ "steps": [
+  {
+   "step": 0,
+   "added": "(start)",
+   "selected": [],
+   "mean": 219.84375,
+   "ci95": 5.617871715417422,
+   "score": 219.84375,
+   "t100": 219.84375,
+   "t95": 182.66741071428572,
+   "t90": 163.86160714285714,
+   "told_by_manager": 0.0,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 45.1,
+    "F2": 101.8,
+    "F3": 54.9,
+    "F4": 68.4,
+    "F5": 26.8,
+    "PE": 482.9,
+    "PW": 427.1
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 1,
+   "added": "mid cross W -> PW",
+   "selected": [
+    "mid cross W -> PW"
+   ],
+   "mean": 214.67633928571428,
+   "ci95": 1.7520760115652565,
+   "score": 214.67633928571428,
+   "t100": 214.67633928571428,
+   "t95": 181.85267857142856,
+   "t90": 163.81696428571428,
+   "told_by_manager": 224.125,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 46.3,
+    "F2": 102.1,
+    "F3": 54.6,
+    "F4": 70.0,
+    "F5": 25.2,
+    "PE": 482.6,
+    "PW": 426.1
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 2,
+   "added": "rear ring E -> PE",
+   "selected": [
+    "mid cross W -> PW",
+    "rear ring E -> PE"
+   ],
+   "mean": 217.07589285714283,
+   "ci95": 2.3355183401846173,
+   "score": 217.07589285714283,
+   "t100": 217.07589285714283,
+   "t95": 181.89732142857144,
+   "t90": 164.02901785714286,
+   "told_by_manager": 376.28125,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 46.4,
+    "F2": 102.7,
+    "F3": 55.7,
+    "F4": 69.9,
+    "F5": 25.2,
+    "PE": 481.9,
+    "PW": 425.1
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 3,
+   "added": "side corridor W -> PW",
+   "selected": [
+    "mid cross W -> PW",
+    "rear ring E -> PE",
+    "side corridor W -> PW"
+   ],
+   "mean": 216.8638392857143,
+   "ci95": 2.897402146942821,
+   "score": 216.8638392857143,
+   "t100": 216.8638392857143,
+   "t95": 181.81919642857144,
+   "t90": 163.90625,
+   "told_by_manager": 464.8125,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 43.2,
+    "F2": 103.8,
+    "F3": 55.6,
+    "F4": 70.4,
+    "F5": 25.0,
+    "PE": 482.2,
+    "PW": 426.8
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 4,
+   "added": "side corridor E -> PE",
+   "selected": [
+    "mid cross W -> PW",
+    "rear ring E -> PE",
+    "side corridor W -> PW",
+    "side corridor E -> PE"
+   ],
+   "mean": 218.49330357142856,
+   "ci95": 3.655422905829598,
+   "score": 218.49330357142856,
+   "t100": 218.49330357142856,
+   "t95": 183.00223214285714,
+   "t90": 164.72098214285717,
+   "told_by_manager": 760.09375,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 45.1,
+    "F2": 103.9,
+    "F3": 54.4,
+    "F4": 69.9,
+    "F5": 25.8,
+    "PE": 483.4,
+    "PW": 424.5
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 5,
+   "added": "lobby -> F3",
+   "selected": [
+    "mid cross W -> PW",
+    "rear ring E -> PE",
+    "side corridor W -> PW",
+    "side corridor E -> PE",
+    "lobby -> F3"
+   ],
+   "mean": 217.421875,
+   "ci95": 2.405181672665961,
+   "score": 217.421875,
+   "t100": 217.421875,
+   "t95": 182.53348214285717,
+   "t90": 164.36383928571428,
+   "told_by_manager": 884.96875,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 36.1,
+    "F2": 49.7,
+    "F3": 139.4,
+    "F4": 48.4,
+    "F5": 23.3,
+    "PE": 482.4,
+    "PW": 427.7
+   },
+   "num_seeds": 32
+  },
+  {
+   "step": 6,
+   "added": "mid cross E -> PE",
+   "selected": [
+    "mid cross W -> PW",
+    "rear ring E -> PE",
+    "side corridor W -> PW",
+    "side corridor E -> PE",
+    "lobby -> F3",
+    "mid cross E -> PE"
+   ],
+   "mean": 218.984375,
+   "ci95": 3.850014032690702,
+   "score": 218.984375,
+   "t100": 218.984375,
+   "t95": 183.14732142857144,
+   "t90": 164.69866071428572,
+   "told_by_manager": 901.1875,
+   "exit_counts": {
+    "BE": 61.0,
+    "BW": 61.0,
+    "F1": 34.7,
+    "F2": 53.6,
+    "F3": 140.3,
+    "F4": 47.3,
+    "F5": 24.4,
+    "PE": 482.2,
+    "PW": 424.6
+   },
+   "num_seeds": 32
+  }
+ ],
+ "managers": [
+  {
+   "id": "mid cross W -> PW",
+   "spot": "mid cross W",
+   "level": 0,
+   "x_m": -10.0,
+   "y_m": -2.0,
+   "target_exit": "PW"
+  },
+  {
+   "id": "rear ring E -> PE",
+   "spot": "rear ring E",
+   "level": 0,
+   "x_m": 11.0,
+   "y_m": -14.5,
+   "target_exit": "PE"
+  },
+  {
+   "id": "side corridor W -> PW",
+   "spot": "side corridor W",
+   "level": 0,
+   "x_m": -17.0,
+   "y_m": -4.0,
+   "target_exit": "PW"
+  },
+  {
+   "id": "side corridor E -> PE",
+   "spot": "side corridor E",
+   "level": 0,
+   "x_m": 17.0,
+   "y_m": -4.0,
+   "target_exit": "PE"
+  },
+  {
+   "id": "lobby -> F3",
+   "spot": "lobby",
+   "level": 0,
+   "x_m": 0.0,
+   "y_m": -21.0,
+   "target_exit": "F3"
+  },
+  {
+   "id": "mid cross E -> PE",
+   "spot": "mid cross E",
+   "level": 0,
+   "x_m": 10.0,
+   "y_m": -2.0,
+   "target_exit": "PE"
+  }
+ ],
+ "led_strips": [],
+ "led_metres": 0
+}

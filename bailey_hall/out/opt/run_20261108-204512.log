@@ -1,0 +1,102 @@
+== managers (start Sun Nov  8 08:45:12 PM EST 2026)
+building scenario and candidates ...
+manager spots by people passing within 4 m (no managers, no LEDs):
+  keep  side corridor W            328
+  keep  side corridor E            318
+  keep  lobby                      290
+  keep  mid cross W                276
+  keep  mid cross E                246
+  keep  centre aisle W             210
+  keep  centre aisle E             206
+  keep  rear ring E                164
+        rear ring W                106
+        balcony SW                  98
+        balcony SE                  96
+        loge back centre            49
+        side corridor E north       40
+        side corridor W north       38
+        front cross E               30
+        front cross W               13
+        balcony E                   13
+        balcony W                   10
+        balcony W north              0
+        balcony E north              0
+        balcony rear                 0
+16 manager candidates, 32 LED strip candidates (profile concert, closed exits none)
+    32 runs in 51 s
+  [0] (start): 0 items | mean 219.8 s ± 5.6 (t100 220, t95 183, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 45.1, 'F2': 101.8, 'F3': 54.9, 'F4': 68.4, 'F5': 26.8, 'PE': 482.9, 'PW': 427.1}
+step 1: trying 16 candidates
+    128 runs in 232 s
+    72 runs in 156 s
+  shortlist for later steps: ['lobby -> F3', 'mid cross W -> PW', 'side corridor W -> PW', 'mid cross E -> PE', 'rear ring E -> F4', 'mid cross E -> SE', 'rear ring E -> PE', 'side corridor E -> PE', 'centre aisle W -> PW', 'mid cross W -> SW']
+  [1] mid cross W -> PW: 1 items | mean 214.7 s ± 1.8 (t100 215, t95 182, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 46.3, 'F2': 102.1, 'F3': 54.6, 'F4': 70.0, 'F5': 25.2, 'PE': 482.6, 'PW': 426.1}
+step 2: trying 8 candidates
+    64 runs in 210 s
+    72 runs in 232 s
+  [2] rear ring E -> PE: 2 items | mean 217.1 s ± 2.3 (t100 217, t95 182, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 46.4, 'F2': 102.7, 'F3': 55.7, 'F4': 69.9, 'F5': 25.2, 'PE': 481.9, 'PW': 425.1}
+step 3: trying 6 candidates
+    48 runs in 135 s
+    72 runs in 197 s
+  [3] side corridor W -> PW: 3 items | mean 216.9 s ± 2.9 (t100 217, t95 182, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 43.2, 'F2': 103.8, 'F3': 55.6, 'F4': 70.4, 'F5': 25.0, 'PE': 482.2, 'PW': 426.8}
+step 4: trying 5 candidates
+    40 runs in 103 s
+    72 runs in 171 s
+  [4] side corridor E -> PE: 4 items | mean 218.5 s ± 3.7 (t100 218, t95 183, t90 165) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 45.1, 'F2': 103.9, 'F3': 54.4, 'F4': 69.9, 'F5': 25.8, 'PE': 483.4, 'PW': 424.5}
+step 5: trying 4 candidates
+    32 runs in 72 s
+    72 runs in 176 s
+  [5] lobby -> F3: 5 items | mean 217.4 s ± 2.4 (t100 217, t95 183, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 36.1, 'F2': 49.7, 'F3': 139.4, 'F4': 48.4, 'F5': 23.3, 'PE': 482.4, 'PW': 427.7}
+step 6: trying 3 candidates
+    24 runs in 84 s
+    72 runs in 191 s
+  [6] mid cross E -> PE: 6 items | mean 219.0 s ± 3.9 (t100 219, t95 183, t90 165) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 34.7, 'F2': 53.6, 'F3': 140.3, 'F4': 47.3, 'F5': 24.4, 'PE': 482.2, 'PW': 424.6}
+800 simulations; results in /home/thinkies/NewGit/CMCM26/bailey_hall/out/opt/managers6_20261108-211850
+== LEDs with managers from out/opt/managers6_20261108-211850/result.json (Sun Nov  8 09:18:51 PM EST 2026)
+building scenario and candidates ...
+LED start spots by people passing within 4 m (no managers, no LEDs):
+  keep  mid cross W                309
+  keep  mid cross E                306
+  keep  rear ring E                277
+  keep  centre aisle W             194
+  keep  centre aisle E             190
+  keep  rear ring W                100
+  keep  balcony SW                  98
+  keep  balcony SE                  96
+        side corridor E             70
+        loge back centre            49
+        front cross E               48
+        front cross W               46
+        side corridor W             20
+        balcony E                   13
+        balcony W                   10
+        balcony rear                 0
+42 manager candidates, 16 LED strip candidates (profile concert, closed exits none)
+    32 runs in 90 s
+  [0] (start): 0 items, 0 m of LED | mean 219.0 s ± 3.9 (t100 219, t95 183, t90 165) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 34.7, 'F2': 53.6, 'F3': 140.3, 'F4': 47.3, 'F5': 24.4, 'PE': 482.2, 'PW': 424.6}
+step 1: trying 16 candidates
+    128 runs in 370 s
+    72 runs in 182 s
+  shortlist for later steps: ['centre aisle E -> F4', 'centre aisle W -> F2', 'balcony SW -> F2', 'mid cross E -> PE', 'balcony SE -> PE', 'rear ring E -> PE', 'balcony SE -> F4', 'centre aisle E -> PE', 'mid cross W -> PW', 'rear ring W -> F2']
+  [1] centre aisle E -> F4: 1 items, 27 m of LED | mean 209.9 s ± 2.3 (t100 210, t95 170, t90 155) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 26.3, 'F2': 31.8, 'F3': 146.7, 'F4': 144.8, 'F5': 12.6, 'PE': 419.5, 'PW': 425.3}
+step 2: trying 8 candidates
+    64 runs in 186 s
+    72 runs in 201 s
+  [2] centre aisle W -> F2: 2 items, 53 m of LED | mean 195.7 s ± 3.8 (t100 196, t95 162, t90 151) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 19.1, 'F2': 149.8, 'F3': 118.1, 'F4': 125.2, 'F5': 13.4, 'PE': 423.3, 'PW': 358.0}
+step 3: trying 7 candidates
+    56 runs in 166 s
+    72 runs in 242 s
+  [3] balcony SE -> PE: 3 items, 76 m of LED | mean 190.4 s ± 3.3 (t100 190, t95 161, t90 150) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 19.5, 'F2': 148.8, 'F3': 108.1, 'F4': 42.6, 'F5': 12.7, 'PE': 514.9, 'PW': 360.3}
+step 4: trying 5 candidates
+    40 runs in 127 s
+    72 runs in 242 s
+  [4] mid cross W -> PW: 4 items, 87 m of LED | mean 190.7 s ± 3.9 (t100 191, t95 160, t90 149) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 18.9, 'F2': 147.4, 'F3': 110.6, 'F4': 42.5, 'F5': 11.6, 'PE': 515.7, 'PW': 360.3}
+step 5: trying 4 candidates
+    32 runs in 99 s
+    72 runs in 203 s
+  [5] rear ring E -> PE: 5 items, 90 m of LED | mean 191.2 s ± 4.5 (t100 191, t95 161, t90 150) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 19.4, 'F2': 148.2, 'F3': 109.7, 'F4': 43.5, 'F5': 11.5, 'PE': 515.4, 'PW': 359.3}
+step 6: trying 3 candidates
+    24 runs in 61 s
+    72 runs in 197 s
+  [6] balcony SW -> F2: 6 items, 108 m of LED | mean 192.8 s ± 4.0 (t100 193, t95 161, t90 149) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 18.4, 'F2': 147.5, 'F3': 110.6, 'F4': 41.4, 'F5': 12.3, 'PE': 514.8, 'PW': 362.0}
+808 simulations; results in /home/thinkies/NewGit/CMCM26/bailey_hall/out/opt/leds6_20261108-215825
+== done in 73 min
