@@ -1,0 +1,34 @@
+== managers (start Sun Nov  8 08:25:26 PM EST 2026)
+building scenario and candidates ...
+manager spots by people passing within 4 m (no managers, no LEDs):
+  keep  side corridor W            328
+  keep  side corridor E            318
+  keep  lobby                      290
+  keep  mid cross W                276
+  keep  mid cross E                246
+  keep  centre aisle W             210
+  keep  centre aisle E             206
+  keep  rear ring E                164
+        rear ring W                106
+        balcony SW                  98
+        balcony SE                  96
+        loge back centre            49
+        side corridor E north       40
+        side corridor W north       38
+        front cross E               30
+        front cross W               13
+        balcony E                   13
+        balcony W                   10
+        balcony W north              0
+        balcony E north              0
+        balcony rear                 0
+16 manager candidates, 32 LED strip candidates (profile concert, closed exits none)
+    32 runs in 90 s
+  [0] (start): 0 items | mean 219.8 s ± 5.6 (t100 220, t95 183, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 45.1, 'F2': 101.8, 'F3': 54.9, 'F4': 68.4, 'F5': 26.8, 'PE': 482.9, 'PW': 427.1}
+step 1: trying 16 candidates
+    128 runs in 360 s
+    72 runs in 181 s
+  shortlist for later steps: ['lobby -> F3', 'mid cross W -> PW', 'side corridor W -> PW', 'mid cross E -> PE', 'rear ring E -> F4', 'mid cross E -> SE', 'rear ring E -> PE', 'side corridor E -> PE', 'centre aisle W -> PW', 'mid cross W -> SW']
+  [1] mid cross W -> PW: 1 items | mean 214.7 s ± 1.8 (t100 215, t95 182, t90 164) | exits {'BE': 61.0, 'BW': 61.0, 'F1': 46.3, 'F2': 102.1, 'F3': 54.6, 'F4': 70.0, 'F5': 25.2, 'PE': 482.6, 'PW': 426.1}
+step 2: trying 8 candidates
+    64 runs in 146 s
