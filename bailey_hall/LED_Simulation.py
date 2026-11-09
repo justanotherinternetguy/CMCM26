@@ -37,7 +37,7 @@ REEVALUATE_EVERY_STEPS = 30
 TARGET_CHOICE_SHARPNESS = 1
 VIEW_RANGE_M = 15.0
 
-PAINT_PATH = f"out/layouts_0.5m/LED_Config_Version1.npz"
+PAINT_PATH = f"out/layouts_0.5m/LED_Config3.npz"
 BARRIERS_ENABLED = False
 
 CLOSED_EXIT_LABELS = ()
@@ -59,7 +59,7 @@ LED_INDEPENDENCE_GAIN = 1.7     # LED independence is multiplied by this for eve
 # The chance is a rate per second: it is
 # CROWD_MANAGER_MAX_SWITCH_RATE_PER_S right next to the manager and falls linearly to 0 at the radius,
 # so the longer someone stays close (e.g. stuck in a queue), the more likely they are to be redirected.
-CROWD_MANAGER_RADIUS_M = 4.0
+CROWD_MANAGER_RADIUS_M = 0.0
 CROWD_MANAGER_MAX_SWITCH_RATE_PER_S = 1.0
 ATTENDEES_PER_CROWD_MANAGER = 250    # NY State Fire Code: at least one manager per 250 attendees
 
